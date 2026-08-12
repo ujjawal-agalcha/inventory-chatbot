@@ -1,28 +1,14 @@
-from fastapi import (
-    FastAPI,
-    Request,
-    Depends,
-    HTTPException,
-)
+from __future__ import annotations
 
-from fastapi.responses import (
-    HTMLResponse,
-    RedirectResponse,
-)
-
+from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-
 from starlette.middleware.sessions import SessionMiddleware
-
 from sqlalchemy.orm import Session
-
 from pydantic import BaseModel, Field
 
-from models import (
-    get_db,
-)
-
+from models import get_db
 from services.inventory_service import (
     get_all_inventory,
     get_component,
@@ -33,25 +19,20 @@ from services.inventory_service import (
     get_reorder_requests,
     update_stock,
 )
-
+from ai_service import answer_question, KB
+from config import SESSION_SECRET, DEV_AUTH_BYPASS, AUTHENTIK_BASE_URL
 from auth import oauth
-from config import SESSION_SECRET
 
 
 # ============================================================
-# FASTAPI APP
+# APP
 # ============================================================
 
 app = FastAPI(
-    title="Inventory Management System",
-    description="Inventory Management API",
-    version="1.0.0",
+    title="AI Inventory Management System",
+    description="Inventory APIs + live inventory-aware RAG chatbot",
+    version="2.0.1",
 )
-
-
-# ============================================================
-# SESSION MIDDLEWARE
-# ============================================================
 
 app.add_middleware(
     SessionMiddleware,
@@ -61,106 +42,60 @@ app.add_middleware(
     https_only=False,
 )
 
-
-# ============================================================
-# STATIC FILES
-# ============================================================
-
-app.mount(
-    "/static",
-    StaticFiles(directory="static"),
-    name="static",
-)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
 
 # ============================================================
-# TEMPLATES
-# ============================================================
-
-templates = Jinja2Templates(
-    directory="templates"
-)
-
-
-# ============================================================
-# PYDANTIC SCHEMAS
+# REQUEST MODELS
 # ============================================================
 
 class ReorderRequestBody(BaseModel):
-
     item_id: int
-
-    quantity: int = Field(
-        gt=0,
-        description="Quantity to reorder",
-    )
+    quantity: int = Field(gt=0)
 
 
 class StockUpdateBody(BaseModel):
-
-    stock: int = Field(
-        ge=0,
-        description="New stock quantity",
-    )
+    stock: int = Field(ge=0)
 
 
 class ChatRequest(BaseModel):
-
-    message: str
+    message: str = Field(min_length=1, max_length=4000)
+    session_id: str | None = None
 
 
 # ============================================================
-# HELPER: INVENTORY ITEM -> DICT
+# SERIALIZERS
 # ============================================================
 
 def inventory_to_dict(item):
-
     return {
         "id": item.id,
-
         "name": item.name,
-
         "category": item.category,
-
         "stock": item.stock,
-
         "min_stock": item.min_stock,
-
         "supplier": item.supplier,
-
-        # Frontend expects last_updated.
-        # SQLAlchemy model uses updated_at.
         "last_updated": (
             item.updated_at.isoformat()
-            if getattr(item, "updated_at", None)
+            if item.updated_at
             else None
         ),
     }
 
 
-# ============================================================
-# HELPER: REORDER -> DICT
-# ============================================================
-
 def reorder_to_dict(reorder):
-
     return {
         "id": reorder.id,
-
         "item_id": reorder.item_id,
-
         "item_name": (
             reorder.item.name
             if reorder.item
             else None
         ),
-
         "quantity": reorder.quantity,
-
         "supplier": reorder.supplier,
-
         "status": reorder.status,
-
         "created_at": (
             reorder.created_at.isoformat()
             if reorder.created_at
@@ -170,37 +105,60 @@ def reorder_to_dict(reorder):
 
 
 # ============================================================
-# ROOT
+# AUTH
+# ============================================================
+
+def current_user(request: Request):
+    if DEV_AUTH_BYPASS:
+        return {
+            "name": "Development User",
+            "email": "dev@localhost",
+            "username": "developer",
+        }
+
+    return request.session.get("user")
+
+
+def require_user(request: Request):
+    user = current_user(request)
+
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required."
+        )
+
+    return user
+
+
+# ============================================================
+# PAGES
 # ============================================================
 
 @app.get("/")
 async def root(request: Request):
-
-    user = request.session.get("user")
-
-    if user:
-
-        return RedirectResponse(
-            url="/chat",
-            status_code=303,
-        )
-
     return RedirectResponse(
-        url="/login",
+        "/chat" if current_user(request) else "/login",
         status_code=303,
     )
 
 
-# ============================================================
-# LOGIN
-# ============================================================
-
 @app.get("/login")
 async def login(request: Request):
+    if DEV_AUTH_BYPASS:
+        return RedirectResponse("/chat", status_code=303)
 
-    redirect_uri = request.url_for(
-        "auth_callback"
-    )
+    if (
+        not AUTHENTIK_BASE_URL
+        or oauth is None
+        or not hasattr(oauth, "authentik")
+    ):
+        raise HTTPException(
+            503,
+            "Authentik is not configured."
+        )
+
+    redirect_uri = request.url_for("auth_callback")
 
     return await oauth.authentik.authorize_redirect(
         request,
@@ -208,406 +166,433 @@ async def login(request: Request):
     )
 
 
-# ============================================================
-# AUTHENTIK CALLBACK
-# ============================================================
-
 @app.get("/auth/callback")
 async def auth_callback(request: Request):
+    if DEV_AUTH_BYPASS:
+        return RedirectResponse("/chat", status_code=303)
 
-    try:
-
-        token = await oauth.authentik.authorize_access_token(
-            request
+    if oauth is None or not hasattr(oauth, "authentik"):
+        raise HTTPException(
+            503,
+            "Authentik is not configured."
         )
 
-        userinfo = token.get("userinfo")
+    try:
+        token = await oauth.authentik.authorize_access_token(request)
 
-        if not userinfo:
+        userinfo = (
+            token.get("userinfo")
+            or await oauth.authentik.userinfo(token=token)
+        )
 
-            userinfo = await oauth.authentik.userinfo(
-                token=token
-            )
-
-        user = {
-
+        request.session["user"] = {
             "name": (
                 userinfo.get("name")
                 or userinfo.get("preferred_username")
                 or userinfo.get("email")
                 or "User"
             ),
-
-            "email": userinfo.get(
-                "email",
-                ""
-            ),
-
-            "username": userinfo.get(
-                "preferred_username",
-                ""
-            ),
+            "email": userinfo.get("email", ""),
+            "username": userinfo.get("preferred_username", ""),
         }
 
-        request.session["user"] = user
-
         return RedirectResponse(
-            url="/chat",
+            "/chat",
             status_code=303,
         )
 
-    except Exception as error:
-
-        print(
-            "Authentik callback error:",
-            repr(error),
-        )
-
-        return HTMLResponse(
-            content="""
-            <html>
-                <head>
-                    <title>Authentication Error</title>
-                </head>
-
-                <body>
-                    <h2>Authentication failed</h2>
-
-                    <p>
-                        Please close this page and try
-                        logging in again.
-                    </p>
-                </body>
-            </html>
-            """,
-            status_code=400,
+    except Exception as exc:
+        raise HTTPException(
+            400,
+            f"Authentication failed: {exc}"
         )
 
 
-# ============================================================
-# DASHBOARD
-# ============================================================
-
-@app.get(
-    "/chat",
-    response_class=HTMLResponse,
-)
+@app.get("/chat", response_class=HTMLResponse)
 async def chat(
     request: Request,
     db: Session = Depends(get_db),
 ):
-
-    user = request.session.get("user")
+    user = current_user(request)
 
     if not user:
-
         return RedirectResponse(
-            url="/login",
+            "/login",
             status_code=303,
         )
-
-    stats = get_inventory_stats(db)
 
     return templates.TemplateResponse(
         request=request,
         name="chat.html",
         context={
             "user": user,
-            "stats": stats,
+            "stats": get_inventory_stats(db),
         },
     )
 
 
-# ============================================================
-# LOGOUT
-# ============================================================
-
 @app.get("/logout")
 async def logout(request: Request):
-
     request.session.clear()
 
     return RedirectResponse(
-        url="/login",
+        "/login",
         status_code=303,
     )
 
 
 # ============================================================
-# GET ALL INVENTORY
+# INVENTORY APIs
 # ============================================================
 
 @app.get("/api/inventory")
 def inventory(
     db: Session = Depends(get_db),
+    _user=Depends(require_user),
 ):
-
-    items = get_all_inventory(db)
-
     return [
-        inventory_to_dict(item)
-        for item in items
+        inventory_to_dict(i)
+        for i in get_all_inventory(db)
     ]
 
-
-# ============================================================
-# GET LOW STOCK
-# ============================================================
 
 @app.get("/api/inventory/low-stock")
 def low_stock(
     db: Session = Depends(get_db),
+    _user=Depends(require_user),
 ):
-
-    items = get_low_stock_items(db)
-
     return [
-        inventory_to_dict(item)
-        for item in items
+        inventory_to_dict(i)
+        for i in get_low_stock_items(db)
     ]
 
-
-# ============================================================
-# GET INVENTORY STATISTICS
-# ============================================================
 
 @app.get("/api/inventory/stats")
 def inventory_stats(
     db: Session = Depends(get_db),
+    _user=Depends(require_user),
 ):
-
     return get_inventory_stats(db)
 
 
-# ============================================================
-# GET SINGLE COMPONENT
-# ============================================================
-
-@app.get(
-    "/api/inventory/component/{name}"
-)
+@app.get("/api/inventory/component/{name}")
 def component(
     name: str,
     db: Session = Depends(get_db),
+    _user=Depends(require_user),
 ):
-
-    item = get_component(
-        db,
-        name,
-    )
+    item = get_component(db, name)
 
     if not item:
-
         raise HTTPException(
-            status_code=404,
-            detail=f"Component '{name}' not found.",
+            404,
+            f"Component '{name}' not found."
         )
 
     return inventory_to_dict(item)
 
-
-# ============================================================
-# FRONTEND COMPATIBILITY API
-#
-# /api/component?name=ESP32-CAM
-# ============================================================
 
 @app.get("/api/component")
 def component_by_query(
     name: str,
     db: Session = Depends(get_db),
+    _user=Depends(require_user),
 ):
-
-    if not name.strip():
-
-        raise HTTPException(
-            status_code=400,
-            detail="Component name cannot be empty.",
-        )
-
-    item = get_component(
-        db,
-        name,
-    )
+    item = get_component(db, name)
 
     if not item:
-
         raise HTTPException(
-            status_code=404,
-            detail=f"Component '{name}' not found.",
+            404,
+            f"Component '{name}' not found."
         )
 
     return inventory_to_dict(item)
 
 
-# ============================================================
-# GET COMPONENTS BY CATEGORY
-# ============================================================
-
 @app.get("/api/components")
 def components_by_category(
     category: str,
     db: Session = Depends(get_db),
+    _user=Depends(require_user),
 ):
-
-    if not category.strip():
-
-        raise HTTPException(
-            status_code=400,
-            detail="Category cannot be empty.",
-        )
-
-    items = get_all_inventory(db)
-
-    matching_items = [
-
-        item
-
-        for item in items
-
-        if item.category
-
-        and item.category.lower()
-        == category.strip().lower()
+    items = [
+        i
+        for i in get_all_inventory(db)
+        if i.category
+        and i.category.lower() == category.strip().lower()
     ]
 
     return [
-        inventory_to_dict(item)
-        for item in matching_items
+        inventory_to_dict(i)
+        for i in items
     ]
 
-
-# ============================================================
-# SEARCH INVENTORY
-# ============================================================
 
 @app.get("/api/inventory/search")
 def inventory_search(
     q: str,
     db: Session = Depends(get_db),
+    _user=Depends(require_user),
 ):
-
     if not q.strip():
-
         raise HTTPException(
-            status_code=400,
-            detail="Search query cannot be empty.",
+            400,
+            "Search query cannot be empty."
         )
 
-    items = search_inventory(
-        db,
-        q,
-    )
-
     return [
-        inventory_to_dict(item)
-        for item in items
+        inventory_to_dict(i)
+        for i in search_inventory(db, q)
     ]
 
 
-# ============================================================
-# UPDATE STOCK
-# ============================================================
-
-@app.put(
-    "/api/inventory/{item_id}/stock"
-)
+@app.put("/api/inventory/{item_id}/stock")
 def change_stock(
     item_id: int,
     data: StockUpdateBody,
     db: Session = Depends(get_db),
+    _user=Depends(require_user),
 ):
-
     try:
-
         item = update_stock(
             db,
             item_id,
             data.stock,
         )
 
-    except ValueError as error:
-
+    except ValueError as exc:
         raise HTTPException(
-            status_code=400,
-            detail=str(error),
+            400,
+            str(exc)
         )
 
     if not item:
-
         raise HTTPException(
-            status_code=404,
-            detail="Inventory item not found.",
+            404,
+            "Inventory item not found."
         )
 
     return {
-
-        "message":
-            "Stock updated successfully.",
-
-        "item":
-            inventory_to_dict(item),
+        "message": "Stock updated successfully.",
+        "item": inventory_to_dict(item),
     }
 
 
 # ============================================================
-# CREATE REORDER REQUEST
+# REORDER APIs
 # ============================================================
 
 @app.post("/api/reorders")
 def reorder(
     data: ReorderRequestBody,
     db: Session = Depends(get_db),
+    _user=Depends(require_user),
 ):
-
     try:
-
-        request_record = create_reorder_request(
-            db=db,
-            item_id=data.item_id,
-            quantity=data.quantity,
+        record = create_reorder_request(
+            db,
+            data.item_id,
+            data.quantity,
         )
 
-    except ValueError as error:
-
+    except ValueError as exc:
         raise HTTPException(
-            status_code=400,
-            detail=str(error),
+            400,
+            str(exc)
         )
 
-    if not request_record:
-
+    if not record:
         raise HTTPException(
-            status_code=404,
-            detail="Inventory item not found.",
+            404,
+            "Inventory item not found."
         )
-
-    reorder_data = reorder_to_dict(
-        request_record
-    )
 
     return {
-        **reorder_data,
-        "message":
-            "Reorder request created successfully.",
+        **reorder_to_dict(record),
+        "message": "Reorder request created successfully.",
     }
 
-
-# ============================================================
-# GET REORDER HISTORY
-# ============================================================
 
 @app.get("/api/reorders")
 def reorders(
     db: Session = Depends(get_db),
+    _user=Depends(require_user),
 ):
-
-    records = get_reorder_requests(db)
-
     return [
-        reorder_to_dict(record)
-        for record in records
+        reorder_to_dict(r)
+        for r in get_reorder_requests(db)
     ]
+
+
+# ============================================================
+# CHAT ROUTING HELPERS
+# ============================================================
+
+def is_greeting(message: str) -> bool:
+    """
+    Detect simple conversational greetings.
+    These should NOT trigger inventory search or RAG.
+    """
+
+    text = message.strip().lower()
+
+    greetings = {
+        "hi",
+        "hello",
+        "hey",
+        "hii",
+        "hiii",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "good night",
+        "hey there",
+        "hello there",
+    }
+
+    return text in greetings
+
+
+def is_thanks(message: str) -> bool:
+    text = message.strip().lower()
+
+    return text in {
+        "thanks",
+        "thank you",
+        "thankyou",
+        "thx",
+        "ty",
+    }
+
+
+def is_goodbye(message: str) -> bool:
+    text = message.strip().lower()
+
+    return text in {
+        "bye",
+        "goodbye",
+        "see you",
+        "see ya",
+        "talk to you later",
+    }
+
+
+def is_inventory_question(message: str) -> bool:
+    """
+    Determines whether the user is asking for LIVE inventory data.
+
+    Knowledge/general questions should not enter this route.
+    """
+
+    low = message.lower()
+
+    inventory_keywords = [
+        "stock",
+        "stocks",
+        "available",
+        "availability",
+        "how many",
+        "quantity",
+        "units",
+        "units left",
+        "in inventory",
+        "inventory",
+        "low stock",
+        "low-stock",
+        "out of stock",
+        "reorder",
+        "re-order",
+        "warehouse",
+    ]
+
+    return any(
+        keyword in low
+        for keyword in inventory_keywords
+    )
+
+
+def build_live_inventory_context(
+    message: str,
+    db: Session,
+) -> tuple[str, list]:
+    """
+    Retrieve LIVE inventory information only when
+    the user is actually asking an inventory question.
+    """
+
+    if not is_inventory_question(message):
+        return "", []
+
+    low = message.lower()
+
+    all_items = get_all_inventory(db)
+
+    # --------------------------------------------------------
+    # 1. Exact product name matching
+    # --------------------------------------------------------
+
+    exact_matches = [
+        item
+        for item in all_items
+        if item.name
+        and item.name.lower() in low
+    ]
+
+    if exact_matches:
+        items = exact_matches
+
+    # --------------------------------------------------------
+    # 2. Low-stock query
+    # --------------------------------------------------------
+
+    elif any(
+        phrase in low
+        for phrase in [
+            "low stock",
+            "low-stock",
+            "shortage",
+            "running low",
+        ]
+    ):
+        items = get_low_stock_items(db)
+
+    # --------------------------------------------------------
+    # 3. Out-of-stock query
+    # --------------------------------------------------------
+
+    elif "out of stock" in low:
+        items = [
+            item
+            for item in all_items
+            if item.stock == 0
+        ]
+
+    # --------------------------------------------------------
+    # 4. General inventory search
+    # --------------------------------------------------------
+
+    else:
+        items = search_inventory(
+            db,
+            message,
+        )[:10]
+
+    # --------------------------------------------------------
+    # Build context for the LLM
+    # --------------------------------------------------------
+
+    context = "\n".join(
+        (
+            f"- {i.name} | "
+            f"category={i.category} | "
+            f"stock={i.stock} | "
+            f"minimum={i.min_stock} | "
+            f"supplier={i.supplier}"
+        )
+        for i in items
+    )
+
+    return context, items
 
 
 # ============================================================
@@ -618,280 +603,255 @@ def reorders(
 def chat_api(
     data: ChatRequest,
     db: Session = Depends(get_db),
+    _user=Depends(require_user),
 ):
-
     message = data.message.strip()
 
-    if not message:
-
-        raise HTTPException(
-            status_code=400,
-            detail="Message cannot be empty.",
-        )
-
-    lower_message = message.lower()
-
-    items = get_all_inventory(db)
-
-
     # ========================================================
-    # LOW STOCK
+    # 1. BASIC CONVERSATION
     # ========================================================
 
-    low_stock_words = [
-
-        "low stock",
-
-        "low-stock",
-
-        "low inventory",
-
-        "out of stock",
-
-        "shortage",
-
-        "shortages",
-
-    ]
-
-    if any(
-        word in lower_message
-        for word in low_stock_words
-    ):
-
-        low_items = get_low_stock_items(db)
-
+    if is_greeting(message):
         return {
-
-            "type":
-                "low_stock",
-
-            "message":
-                f"{len(low_items)} low-stock "
-                f"item(s) found.",
-
-            "data": [
-                inventory_to_dict(item)
-                for item in low_items
-            ],
+            "type": "ai",
+            "answer": (
+                "Hey! 👋 I'm your inventory assistant. "
+                "I can help you with products, IoT hardware, "
+                "stock availability, and inventory information. "
+                "What can I help you with?"
+            ),
+            "data": [],
+            "sources": [],
+            "mode": "conversation",
         }
 
-
-    # ========================================================
-    # REORDER
-    # ========================================================
-
-    if (
-        "reorder" in lower_message
-        or "re-stock" in lower_message
-        or "restock" in lower_message
-        or "order" in lower_message
-    ):
-
-        for item in items:
-
-            if item.name.lower() in lower_message:
-
-                return {
-
-                    "type":
-                        "component",
-
-                    "message":
-                        f"{item.name} is available "
-                        "for reorder.",
-
-                    "data":
-                        inventory_to_dict(item),
-                }
-
+    if is_thanks(message):
         return {
-
-            "type":
-                "default",
-
-            "message":
-                "Please provide the component name "
-                "you want to reorder.",
+            "type": "ai",
+            "answer": (
+                "You're welcome! 😊 "
+                "Let me know if you need anything else."
+            ),
+            "data": [],
+            "sources": [],
+            "mode": "conversation",
         }
 
+    if is_goodbye(message):
+        return {
+            "type": "ai",
+            "answer": (
+                "Goodbye! 👋 "
+                "Feel free to come back whenever you need help."
+            ),
+            "data": [],
+            "sources": [],
+            "mode": "conversation",
+        }
 
     # ========================================================
-    # CATEGORY SEARCH
+    # 2. LIVE INVENTORY CONTEXT
     # ========================================================
 
-    categories = sorted(
-        set(
-            item.category
-            for item in items
-            if item.category
-        )
+    live_context, matched = build_live_inventory_context(
+        message,
+        db,
     )
 
-    for category in categories:
-
-        if category.lower() in lower_message:
-
-            category_items = [
-
-                item
-
-                for item in items
-
-                if item.category
-
-                and item.category.lower()
-                == category.lower()
-            ]
-
-            return {
-
-                "type":
-                    "category",
-
-                "message":
-                    f"{len(category_items)} "
-                    f"component(s) found in "
-                    f"{category}.",
-
-                "data": [
-                    inventory_to_dict(item)
-                    for item in category_items
-                ],
-            }
-
+    low = message.lower()
 
     # ========================================================
-    # COMPONENT SEARCH
+    # 3. LOW STOCK
     # ========================================================
 
-    for item in items:
-
-        if item.name.lower() in lower_message:
-
-            return {
-
-                "type":
-                    "component",
-
-                "message":
-                    f"Information for "
-                    f"{item.name}.",
-
-                "data":
-                    inventory_to_dict(item),
-            }
-
-
-    # ========================================================
-    # ALL INVENTORY
-    # ========================================================
-
-    if (
-        "inventory" in lower_message
-
-        or "all products" in lower_message
-
-        or "all components" in lower_message
-
-        or "all items" in lower_message
-
-        or "show everything" in lower_message
+    if any(
+        x in low
+        for x in [
+            "low stock",
+            "low-stock",
+            "shortage",
+            "running low",
+        ]
     ):
+        items = get_low_stock_items(db)
+
+        if not items:
+            answer = (
+                "Good news — there are currently "
+                "no products below their minimum "
+                "stock level."
+            )
+        else:
+            answer = (
+                f"There are currently {len(items)} "
+                f"product(s) below their minimum stock level."
+            )
 
         return {
-
-            "type":
-                "inventory",
-
-            "message":
-                f"There are {len(items)} "
-                "inventory components.",
-
+            "type": "inventory",
+            "answer": answer,
             "data": [
-                inventory_to_dict(item)
-                for item in items
+                inventory_to_dict(i)
+                for i in items
             ],
+            "sources": ["live_inventory"],
+            "mode": "live_inventory",
         }
 
+    # ========================================================
+    # 4. ALL INVENTORY
+    # ========================================================
+
+    if any(
+        x in low
+        for x in [
+            "all inventory",
+            "all products",
+            "all components",
+            "everything in inventory",
+        ]
+    ):
+        items = get_all_inventory(db)
+
+        return {
+            "type": "inventory",
+            "answer": (
+                f"There are {len(items)} "
+                f"products in the inventory."
+            ),
+            "data": [
+                inventory_to_dict(i)
+                for i in items
+            ],
+            "sources": ["live_inventory"],
+            "mode": "live_inventory",
+        }
 
     # ========================================================
-    # SUPPLIER SEARCH
+    # 5. SPECIFIC STOCK QUESTION
     # ========================================================
 
     if (
-        "supplier" in lower_message
-        or "vendor" in lower_message
+        matched
+        and any(
+            x in low
+            for x in [
+                "stock",
+                "available",
+                "availability",
+                "how many",
+                "quantity",
+                "units left",
+            ]
+        )
     ):
+        # Use exact product match when available.
+        item = matched[0]
 
-        supplier_results = []
+        is_low = item.stock <= item.min_stock
 
-        for item in items:
+        if item.stock == 0:
+            availability = "currently out of stock"
+        else:
+            availability = (
+                f"{item.stock} units available"
+            )
 
-            if item.supplier:
+        if item.stock == 0:
+            status = "It needs to be reordered."
+        elif is_low:
+            status = (
+                "It is currently below the "
+                "minimum stock threshold."
+            )
+        else:
+            status = (
+                "It is currently above the "
+                "minimum stock threshold."
+            )
 
-                supplier_text = (
-                    item.supplier.lower()
-                )
+        answer = (
+            f"We currently have {item.stock} "
+            f"{item.name} unit(s) in stock. "
+            f"The minimum stock level is "
+            f"{item.min_stock} units. "
+            f"{status}"
+        )
 
-                if (
-                    supplier_text
-                    in lower_message
-                ):
-
-                    supplier_results.append(
-                        item
-                    )
-
-        if supplier_results:
-
-            return {
-
-                "type":
-                    "inventory",
-
-                "message":
-                    f"Found "
-                    f"{len(supplier_results)} "
-                    "component(s) from that supplier.",
-
-                "data": [
-                    inventory_to_dict(item)
-                    for item in supplier_results
-                ],
-            }
-
+        return {
+            "type": "inventory",
+            "answer": answer,
+            "data": [
+                inventory_to_dict(item)
+            ],
+            "sources": ["live_inventory"],
+            "mode": "live_inventory",
+        }
 
     # ========================================================
-    # DEFAULT
+    # 6. GENERAL / KNOWLEDGE / COMPANY QUESTIONS
     # ========================================================
 
-    return {
+    # These go to the AI service.
+    #
+    # Important:
+    # answer_question() is responsible for deciding whether
+    # RAG/company knowledge is needed.
+    #
+    # Inventory data is NOT automatically attached here.
 
-        "type":
-            "default",
+    result = answer_question(
+        message,
+        inventory_context=live_context,
+    )
 
-        "message":
-            "I can help you with inventory, "
-            "component stock, low-stock items, "
-            "categories, suppliers and "
-            "reorder requests.",
-    }
+    result["type"] = "ai"
+
+    # Never display inventory cards for normal AI answers.
+    result["data"] = []
+
+    return result
 
 
 # ============================================================
-# HEALTH CHECK
+# RAG
+# ============================================================
+
+@app.post("/api/rag/reload")
+def reload_rag(
+    _user=Depends(require_user),
+):
+    KB.reload()
+
+    return {
+        "message": "Knowledge base reloaded.",
+        "chunks": len(KB.chunks),
+    }
+
+
+@app.get("/api/rag/search")
+def rag_search(
+    q: str,
+    _user=Depends(require_user),
+):
+    if not q.strip():
+        raise HTTPException(
+            400,
+            "Query cannot be empty."
+        )
+
+    return KB.search(q)
+
+
+# ============================================================
+# HEALTH
 # ============================================================
 
 @app.get("/api/health")
 def health():
-
     return {
-
-        "status":
-            "ok",
-
-        "service":
-            "inventory-management-system",
+        "status": "ok",
+        "service": "ai-inventory-management-system",
+        "rag_chunks": len(KB.chunks),
     }
 #python -m uvicorn app:app --reload --port 8001
