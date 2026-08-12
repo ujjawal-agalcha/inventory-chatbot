@@ -1,0 +1,13 @@
+Inventory Chatbot FAQ
+
+What can the assistant do?
+- Search products, explain product information, check current stock, identify low-stock items, and provide relevant documentation.
+
+Where does stock information come from?
+- Current stock is read from the live inventory database/API. Documentation and RAG must never be treated as the source of truth for quantities.
+
+What if a product is out of stock?
+- The assistant should state that it is out of stock and can suggest checking related products or creating a reorder request when the user has permission.
+
+What if the assistant does not know an answer?
+- It should say that the information is unavailable instead of inventing an answer.

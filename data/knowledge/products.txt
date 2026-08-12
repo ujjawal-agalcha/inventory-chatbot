@@ -1,0 +1,31 @@
+IoT Hardware Knowledge
+
+ESP32-CAM
+- Category: ESP Modules
+- Use: Wi-Fi/Bluetooth microcontroller board with camera capability.
+- Typical applications: remote monitoring, computer vision prototypes, IoT cameras.
+- For current stock, always query the inventory system.
+
+ESP32 DevKit V1
+- Category: ESP Modules
+- Use: General-purpose ESP32 development and IoT prototyping.
+- Connectivity: Wi-Fi and Bluetooth.
+- For current stock, always query the inventory system.
+
+ESP8266 NodeMCU
+- Category: ESP Modules
+- Use: Low-cost Wi-Fi microcontroller development.
+- Typical applications: connected sensors and home/industrial IoT prototypes.
+
+Arduino Uno R3
+- Category: Arduino Boards
+- Use: General-purpose microcontroller prototyping and educational projects.
+
+HC-SR04 Ultrasonic Sensor
+- Category: Sensors
+- Use: Distance measurement using ultrasonic pulses.
+- Typical applications: obstacle detection and robotics.
+
+DHT11 Temperature Sensor
+- Category: Sensors
+- Use: Basic temperature and humidity sensing.
