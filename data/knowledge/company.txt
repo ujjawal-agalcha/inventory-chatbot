@@ -1,0 +1,22 @@
+Company Knowledge
+
+This knowledge base contains information about the company's
+IoT hardware inventory system.
+
+The system manages IoT hardware components and electronic
+devices.
+
+The inventory contains products such as ESP32 modules,
+Arduino boards, motor drivers, motors, sensors, batteries,
+displays, relays, communication modules, and electronic
+components.
+
+ESP32-CAM is an ESP32-based camera development board used
+for projects involving wireless connectivity and imaging.
+
+Arduino Uno R3 is a microcontroller development board
+commonly used for electronics and embedded-system projects.
+
+The inventory database is responsible for storing current
+stock quantities. Current stock information must be obtained
+from the inventory system rather than from this knowledge base.
