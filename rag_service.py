@@ -142,6 +142,7 @@ else:
 
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
+    google_api_key=os.getenv("GEMINI_API_KEY"),
     temperature=0.2,
     max_retries=2,
 )

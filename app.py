@@ -37,7 +37,7 @@ from services.inventory_service import (
 from auth import oauth
 from config import SESSION_SECRET
 
-from agent_service import ask_agent
+import agent_service
 
 # ============================================================
 # FASTAPI APP
@@ -632,7 +632,7 @@ async def chat_api(
         )
 
     try:
-        answer = await ask_agent(message)
+        answer = await agent_service.ask_agent(message)
 
         return {
             "type": "ai",

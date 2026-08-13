@@ -1,834 +1,205 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-
     <meta charset="UTF-8">
-
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
-
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Inventory Management Dashboard</title>
-
-    <link
-        rel="stylesheet"
-        href="/static/style.css"
-    >
-
-    <style>
-
-        /* =========================================================
-           GENERAL
-        ========================================================= */
-
-        .loading {
-            padding: 20px;
-            text-align: center;
-            color: #64748b;
-        }
-
-        .error-message {
-            padding: 15px;
-            margin: 10px 0;
-            border-radius: 10px;
-            background: #fee2e2;
-            color: #991b1b;
-        }
-
-        .empty-message {
-            padding: 20px;
-            text-align: center;
-            color: #64748b;
-        }
-
-
-        /* =========================================================
-           LOW STOCK NOTIFICATION
-        ========================================================= */
-
-        .low-stock-notification {
-            display: none;
-            margin-top: 20px;
-            padding: 16px 18px;
-            border-radius: 12px;
-            background: #fff7ed;
-            border: 1px solid #fed7aa;
-            color: #9a3412;
-        }
-
-        .low-stock-notification.show {
-            display: block;
-        }
-
-        .low-stock-notification-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 15px;
-            flex-wrap: wrap;
-        }
-
-        .low-stock-notification-title {
-            font-size: 16px;
-            font-weight: 700;
-        }
-
-        .low-stock-notification-count {
-            background: #dc2626;
-            color: white;
-            padding: 4px 9px;
-            border-radius: 999px;
-            font-size: 12px;
-            font-weight: 700;
-        }
-
-        .low-stock-notification-text {
-            margin-top: 8px;
-            color: #9a3412;
-            line-height: 1.5;
-        }
-
-
-        /* =========================================================
-           CATEGORY CARDS
-        ========================================================= */
-
-        .category-card {
-            cursor: pointer;
-
-            transition:
-                transform 0.2s ease,
-                box-shadow 0.2s ease;
-        }
-
-        .category-card:hover {
-            transform: translateY(-2px);
-
-            box-shadow:
-                0 8px 20px rgba(0, 0, 0, 0.08);
-        }
-
-        .category-card.active {
-            border: 2px solid #4f67df;
-        }
-
-
-        /* =========================================================
-           INVENTORY RESULTS
-        ========================================================= */
-
-        .inventory-results {
-            margin-top: 20px;
-            display: none;
-        }
-
-        .inventory-results h3 {
-            margin-bottom: 12px;
-        }
-
-        .inventory-list {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .inventory-item {
-            padding: 14px;
-
-            border: 1px solid #e2e8f0;
-            border-radius: 10px;
-
-            background: #ffffff;
-        }
-
-        .inventory-item-header {
-            display: flex;
-
-            justify-content: space-between;
-
-            gap: 15px;
-
-            align-items: center;
-        }
-
-        .inventory-item-name {
-            font-weight: 700;
-            color: #172033;
-        }
-
-        .inventory-item-details {
-            margin-top: 6px;
-
-            color: #64748b;
-
-            font-size: 14px;
-
-            line-height: 1.6;
-        }
-
-        .stock-normal {
-            color: #15803d;
-            font-weight: 700;
-        }
-
-        .stock-low {
-            color: #dc2626;
-            font-weight: 700;
-        }
-
-
-        /* =========================================================
-           INVENTORY ACTIONS
-        ========================================================= */
-
-        .inventory-actions {
-            display: flex;
-
-            gap: 8px;
-
-            margin-top: 12px;
-
-            flex-wrap: wrap;
-        }
-
-        .reorder-button {
-            border: none;
-
-            background: #2563eb;
-
-            color: white;
-
-            padding: 9px 14px;
-
-            border-radius: 8px;
-
-            cursor: pointer;
-
-            font-weight: 600;
-
-            transition:
-                background 0.2s ease,
-                transform 0.2s ease;
-        }
-
-        .reorder-button:hover {
-            background: #1d4ed8;
-
-            transform: translateY(-1px);
-        }
-
-        .reorder-button:disabled {
-            background: #94a3b8;
-
-            cursor: not-allowed;
-
-            transform: none;
-        }
-
-        .view-button {
-            border: 1px solid #cbd5e1;
-
-            background: white;
-
-            color: #334155;
-
-            padding: 9px 14px;
-
-            border-radius: 8px;
-
-            cursor: pointer;
-
-            font-weight: 600;
-        }
-
-        .view-button:hover {
-            background: #f8fafc;
-        }
-
-
-        /* =========================================================
-           ASSISTANT
-        ========================================================= */
-
-        .conversation {
-            min-height: 180px;
-
-            max-height: 420px;
-
-            overflow-y: auto;
-        }
-
-        .user-message {
-            background: #4f67df;
-
-            color: white;
-
-            padding: 10px 14px;
-
-            border-radius: 12px;
-
-            margin: 8px 0 8px auto;
-
-            max-width: 85%;
-
-            width: fit-content;
-        }
-
-        .bot-message {
-            margin: 8px 0;
-        }
-
-        .assistant-input {
-            display: flex;
-
-            gap: 10px;
-
-            margin-top: 15px;
-        }
-
-        .assistant-input input {
-            flex: 1;
-        }
-
-        .assistant-input button {
-            cursor: pointer;
-        }
-
-
-        /* =========================================================
-           LOW STOCK
-        ========================================================= */
-
-        .low-stock-section {
-            margin-top: 25px;
-        }
-
-        .low-stock-list {
-            display: flex;
-
-            flex-direction: column;
-
-            gap: 10px;
-        }
-
-
-        /* =========================================================
-           REORDER
-        ========================================================= */
-
-        .reorder-section {
-            margin-top: 25px;
-        }
-
-        .reorder-list {
-            display: flex;
-
-            flex-direction: column;
-
-            gap: 10px;
-        }
-
-        .reorder-item {
-            padding: 14px;
-
-            border: 1px solid #dbeafe;
-
-            border-radius: 10px;
-
-            background: #ffffff;
-        }
-
-        .reorder-header {
-            display: flex;
-
-            justify-content: space-between;
-
-            gap: 10px;
-
-            align-items: center;
-        }
-
-        .reorder-status {
-            color: #ca8a04;
-
-            font-weight: 700;
-        }
-
-        .reorder-details {
-            margin-top: 7px;
-
-            color: #64748b;
-
-            font-size: 14px;
-
-            line-height: 1.6;
-        }
-
-        .status-pending {
-            color: #ca8a04;
-        }
-
-        .status-completed {
-            color: #15803d;
-        }
-
-        .status-cancelled {
-            color: #dc2626;
-        }
-
-
-        /* =========================================================
-           NOTIFICATION CLOSE
-        ========================================================= */
-
-        .notification-close {
-            border: none;
-
-            background: transparent;
-
-            color: #9a3412;
-
-            font-size: 20px;
-
-            cursor: pointer;
-
-            line-height: 1;
-        }
-
-    </style>
-
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
-
-
 <body>
 
+<div class="dashboard">
 
-<header class="topbar">
-
-    <div class="topbar-left">
-
-        <div class="logo">
-            IMS
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="brand-logo">IMS</div>
+            <div class="brand-text">
+                <h2>Inventory AI</h2>
+                <p>Management Dashboard</p>
+            </div>
         </div>
 
-        <div>
+        <nav class="sidebar-nav">
+            <a href="#" class="active">Dashboard</a>
+            <a href="#">Inventory</a>
+            <a href="#">Categories</a>
+            <a href="#">Suppliers</a>
+            <a href="#">Reorder Requests</a>
+            <a href="#">Analytics</a>
+        </nav>
 
-            <h1>
-                Inventory Management
-            </h1>
+        <div class="sidebar-footer">
+            <div class="user-card">
+                <div class="user-avatar">
+                    {{ user.name[0] if user.name else "A" }}
+                </div>
+                <div>
+                    <div class="user-name">{{ user.name }}</div>
+                    <div class="user-role">Administrator</div>
+                </div>
+            </div>
 
-            <p>
-                AI Inventory Assistant Dashboard
-            </p>
-
+            <a href="/logout" class="logout-btn">Logout</a>
         </div>
+    </aside>
 
-    </div>
+    <!-- Main Content -->
+    <main class="main-content">
 
-
-    <div class="topbar-right">
-
-        <span>
-            {{ user.name if user and user.name else "User" }}
-        </span>
-
-        <a
-            href="/logout"
-            class="logout-btn"
-        >
-            Logout
-        </a>
-
-    </div>
-
-</header>
-
-
-<main class="dashboard">
-
-
-    <!-- =========================================================
-         WELCOME
-    ========================================================== -->
-
-    <section class="welcome-card">
-
-        <h2>
-
-            Welcome back,
-
-            {{ user.name if user and user.name else "User" }}
-
-        </h2>
-
-        <p>
-
-            Monitor inventory, track stock levels,
-            manage suppliers, and interact with
-            the AI Inventory Assistant.
-
-        </p>
-
-    </section>
-
-
-    <!-- =========================================================
-         LOW STOCK NOTIFICATION
-    ========================================================== -->
-
-    <section
-        id="low-stock-notification"
-        class="low-stock-notification"
-    >
-
-        <div class="low-stock-notification-header">
-
+        <!-- Header -->
+        <header class="top-header">
             <div>
-
-                <div class="low-stock-notification-title">
-
-                    ⚠ Low Stock Alert
-
-                    <span
-                        id="notification-count"
-                        class="low-stock-notification-count"
-                    >
-                        0
-                    </span>
-
-                </div>
-
-                <div class="low-stock-notification-text">
-
-                    Some inventory items have reached
-                    or fallen below their minimum stock level.
-                    Please review them and create reorder requests.
-
-                </div>
-
+                <h1>Inventory Management</h1>
+                <p>AI-powered inventory monitoring and stock intelligence</p>
             </div>
 
-
-            <button
-                type="button"
-                class="notification-close"
-                onclick="hideLowStockNotification()"
-                aria-label="Close notification"
-            >
-                ×
-            </button>
-
-        </div>
-
-    </section>
-
-
-    <!-- =========================================================
-         STATISTICS
-    ========================================================== -->
-
-    <section class="stats-grid">
-
-
-        <div class="stat-card">
-
-            <div class="stat-title">
-                Total Products
-            </div>
-
-            <div
-                class="stat-value"
-                id="total-products"
-            >
-                —
-            </div>
-
-            <div class="stat-subtitle">
-                Across all inventory
-            </div>
-
-        </div>
-
-
-        <div class="stat-card">
-
-            <div class="stat-title">
-                Low Stock Items
-            </div>
-
-            <div
-                class="stat-value warning"
-                id="low-stock-count"
-            >
-                —
-            </div>
-
-            <div class="stat-subtitle">
-                Require attention
-            </div>
-
-        </div>
-
-
-        <div class="stat-card">
-
-            <div class="stat-title">
-                Suppliers
-            </div>
-
-            <div
-                class="stat-value"
-                id="supplier-count"
-            >
-                —
-            </div>
-
-            <div class="stat-subtitle">
-                Active vendors
-            </div>
-
-        </div>
-
-
-        <div class="stat-card">
-
-            <div class="stat-title">
-                Categories
-            </div>
-
-            <div
-                class="stat-value"
-                id="category-count"
-            >
-                —
-            </div>
-
-            <div class="stat-subtitle">
-                Inventory groups
-            </div>
-
-        </div>
-
-
-    </section>
-
-
-    <!-- =========================================================
-         MAIN GRID
-    ========================================================== -->
-
-    <section class="main-grid">
-
-
-        <!-- =====================================================
-             CATEGORIES / INVENTORY
-        ====================================================== -->
-
-        <div class="categories-panel">
-
-
-            <div class="panel-header">
-
-                <h3>
-                    Browse Categories
-                </h3>
-
-                <p>
-                    Select a category to explore components
-                </p>
-
-            </div>
-
-
-            <!-- CATEGORY GRID -->
-
-            <div
-                id="category-grid"
-                class="category-grid"
-            >
-
-                <div class="loading">
-                    Loading inventory...
-                </div>
-
-            </div>
-
-
-            <!-- =================================================
-                 INVENTORY RESULTS
-            ================================================== -->
-
-            <div
-                id="inventory-results"
-                class="inventory-results"
-            >
-
-                <h3 id="inventory-results-title">
-                    Inventory
-                </h3>
-
-                <div
-                    id="inventory-list"
-                    class="inventory-list"
-                ></div>
-
-            </div>
-
-
-            <!-- =================================================
-                 LOW STOCK
-            ================================================== -->
-
-            <div class="low-stock-section">
-
-                <h3>
-                    ⚠ Low Stock Items
-                </h3>
-
-                <div
-                    id="low-stock-list"
-                    class="low-stock-list"
-                >
-
-                    <div class="loading">
-                        Loading...
-                    </div>
-
-                </div>
-
-            </div>
-
-
-            <!-- =================================================
-                 REORDER REQUESTS
-            ================================================== -->
-
-            <div class="reorder-section">
-
-                <h3>
-                    📦 Reorder Requests
-                </h3>
-
-                <div
-                    id="reorder-list"
-                    class="reorder-list"
-                >
-
-                    <div class="loading">
-                        Loading reorder requests...
-                    </div>
-
-                </div>
-
-            </div>
-
-
-        </div>
-
-
-        <!-- =====================================================
-             INVENTORY ASSISTANT
-        ====================================================== -->
-
-        <div class="assistant-panel">
-
-
-            <div class="panel-header">
-
-                <h3>
-                    Inventory Assistant
-                </h3>
-
-                <p>
-                    Ask questions about inventory and stock
-                </p>
-
-            </div>
-
-
-            <!-- CONVERSATION -->
-
-            <div
-                id="conversation"
-                class="conversation"
-            >
-
-                <div class="bot-message">
-
-                    Hello! 👋
-
-                    <br><br>
-
-                    I can help you:
-
-                    <ul>
-
-                        <li>
-                            Check inventory
-                        </li>
-
-                        <li>
-                            Find low-stock products
-                        </li>
-
-                        <li>
-                            View component details
-                        </li>
-
-                        <li>
-                            Check suppliers
-                        </li>
-
-                        <li>
-                            Create reorder requests
-                        </li>
-
-                    </ul>
-
-                    You can also use the
-                    <strong>Reorder</strong>
-                    buttons directly on inventory items.
-
-                </div>
-
-            </div>
-
-
-            <!-- INPUT -->
-
-            <div class="assistant-input">
-
-                <input
-                    type="text"
-                    id="message-input"
-                    placeholder="Ask about inventory..."
-                    autocomplete="off"
-                >
-
-                <button
-                    type="button"
-                    onclick="sendMessage()"
-                >
-                    Send
+            <div class="header-actions">
+                <button class="notify-btn">
+                    Low Stock Alerts
                 </button>
+            </div>
+        </header>
+
+        <!-- Hero -->
+        <section class="hero-card">
+            <div class="hero-content">
+                <div>
+                    <span class="hero-badge">AI Inventory Assistant</span>
+                    <h2>Welcome back, {{ user.name }}</h2>
+                    <p>
+                        Monitor inventory levels, identify low-stock components,
+                        manage suppliers, and interact with the AI assistant
+                        using natural language.
+                    </p>
+                </div>
+
+                <div class="hero-actions">
+                    <button class="primary-btn">View Inventory</button>
+                    <button class="secondary-btn">Generate Report</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Stats -->
+        <section class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon blue">📦</div>
+                <div class="stat-info">
+                    <span>Total Products</span>
+                    <h3>124</h3>
+                    <small>Across all categories</small>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon red">⚠</div>
+                <div class="stat-info">
+                    <span>Low Stock</span>
+                    <h3>8</h3>
+                    <small>Require attention</small>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon green">🚚</div>
+                <div class="stat-info">
+                    <span>Suppliers</span>
+                    <h3>18</h3>
+                    <small>Active vendors</small>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon purple">📂</div>
+                <div class="stat-info">
+                    <span>Categories</span>
+                    <h3>6</h3>
+                    <small>Inventory groups</small>
+                </div>
+            </div>
+        </section>
+
+        <!-- Content -->
+        <section class="content-grid">
+
+            <!-- Categories -->
+            <div class="categories-panel">
+                <div class="panel-header">
+                    <h3>Browse Categories</h3>
+                    <p>Select a category to explore components and stock</p>
+                </div>
+
+                <div id="category-grid" class="category-grid"></div>
+            </div>
+
+            <!-- AI Assistant -->
+            <div class="assistant-panel">
+
+                <div class="assistant-header">
+                    <div class="assistant-title">
+                        <div class="assistant-icon">AI</div>
+                        <div>
+                            <h3>Inventory Assistant</h3>
+                            <p>Ask about stock, suppliers, and components</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="quick-prompts">
+                    <button onclick="quickAsk('How many ESP32-CAM do we have?')">
+                        ESP32-CAM stock
+                    </button>
+                    <button onclick="quickAsk('Show low stock items')">
+                        Low stock
+                    </button>
+                    <button onclick="quickAsk('Tell me about ESP32-CAM')">
+                        Product info
+                    </button>
+                    <button onclick="quickAsk('Reorder ESP32-CAM')">
+                        Create reorder
+                    </button>
+                </div>
+
+                <div id="conversation" class="conversation">
+                    <div class="bot-message">
+                        <strong>Inventory Assistant</strong><br><br>
+                        I can help you:
+                        <ul>
+                            <li>Check live inventory stock</li>
+                            <li>Monitor low-stock items</li>
+                            <li>View supplier information</li>
+                            <li>Create reorder requests</li>
+                            <li>Answer product and inventory questions</li>
+                        </ul>
+                        Try asking: <em>"How many ESP32-CAM do we have?"</em>
+                    </div>
+                </div>
+
+                <div class="assistant-input">
+                    <input
+                        type="text"
+                        id="message-input"
+                        placeholder="Ask about inventory, products, or stock..."
+                        onkeypress="if(event.key==='Enter') sendMessage()"
+                    >
+                    <button onclick="sendMessage()" class="send-btn">
+                        Send
+                    </button>
+                </div>
 
             </div>
 
+        </section>
 
-        </div>
+    </main>
 
-
-    </section>
-
-
-</main>
-
+</div>
 
 <script src="/static/script.js"></script>
 
-
 </body>
-
 </html>
