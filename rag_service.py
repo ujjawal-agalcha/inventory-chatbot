@@ -6,7 +6,6 @@ import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
 
 
 load_dotenv()
@@ -17,7 +16,7 @@ load_dotenv()
 # ============================================================
 
 BASE_DIR = Path(__file__).resolve().parent
-KNOWLEDGE_DIR = BASE_DIR / "knowledge"
+KNOWLEDGE_DIR = BASE_DIR / "data" / "knowledge"
 
 
 # ============================================================
@@ -140,12 +139,6 @@ else:
 # GEMINI
 # ============================================================
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=os.getenv("GEMINI_API_KEY"),
-    temperature=0.2,
-    max_retries=2,
-)
 
 
 # ============================================================
@@ -212,164 +205,10 @@ def retrieve(
 # ANSWER USING RAG
 # ============================================================
 
-def answer_with_rag(
-    question: str,
-) -> str:
-
-    results = retrieve(
-        question
-    )
+def answer_with_rag(question: str) -> str:
+    results = retrieve(question)
 
     if not results:
+        return "I couldn't find relevant information in the knowledge base."
 
-        return (
-            "I couldn't find relevant information "
-            "in the knowledge base."
-        )
-
-    context = "\n\n".join(
-        [
-            result["text"]
-            for result in results
-        ]
-    )
-
-    prompt = f"""
-You are an AI assistant for an IoT hardware
-inventory management system.
-
-Answer the user's question using the knowledge
-provided below.
-
-IMPORTANT RULES:
-
-1. Use the provided knowledge as the source of truth
-   for company-specific information.
-
-2. Do not invent company-specific facts.
-
-3. If the knowledge does not contain enough information
-   to answer the question, say that the information is
-   not available in the knowledge base.
-
-4. Do NOT provide current inventory quantities from the
-   knowledge base. Current stock information belongs to
-   the inventory system.
-
-5. Answer naturally and concisely.
-
-KNOWLEDGE:
-----------------
-{context}
-----------------
-
-USER QUESTION:
-{question}
-"""
-
-    response = llm.invoke(
-        prompt
-    )
-
-    content = response.content
-
-    if isinstance(
-        content,
-        str,
-    ):
-        return content
-
-    if isinstance(
-        content,
-        list,
-    ):
-
-        text_parts = []
-
-        for item in content:
-
-            if isinstance(
-                item,
-                dict,
-            ):
-
-                text = item.get(
-                    "text"
-                )
-
-                if text:
-                    text_parts.append(
-                        text
-                    )
-
-        if text_parts:
-            return "\n".join(
-                text_parts
-            )
-
-    return str(content)
-
-
-# ============================================================
-# COMMAND LINE TEST
-# ============================================================
-
-if __name__ == "__main__":
-
-    print()
-    print(
-        "RAG Knowledge Assistant"
-    )
-    print(
-        "Type 'exit' to quit."
-    )
-    print()
-
-    while True:
-
-        question = input(
-            "You: "
-        ).strip()
-
-        if question.lower() == "exit":
-            break
-
-        try:
-
-            results = retrieve(
-                question
-            )
-
-            print()
-            print(
-                "Retrieved knowledge:"
-            )
-
-            for result in results:
-
-                print(
-                    f"- {result['source']} "
-                    f"(score={result['score']:.3f})"
-                )
-
-            answer = answer_with_rag(
-                question
-            )
-
-            print()
-            print(
-                f"Assistant: {answer}"
-            )
-            print()
-
-        except Exception as error:
-
-            print()
-            print(
-                "RAG error:"
-            )
-            print(
-                repr(error)
-            )
-            print()
-            
+    return "\n\n".join(r["text"] for r in results)

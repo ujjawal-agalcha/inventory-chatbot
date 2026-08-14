@@ -1,208 +1,139 @@
-from sqlalchemy.orm import Session
-from sqlalchemy import func
+from database import get_connection
 
-from models import InventoryItem, ReorderRequest
+# Get all inventory items
+def get_all_inventory(_db=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM components ORDER BY name")
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
 
-
-# ============================================================
-# GET ALL INVENTORY
-# ============================================================
-
-def get_all_inventory(db: Session):
-    return (
-        db.query(InventoryItem)
-        .order_by(InventoryItem.name)
-        .all()
+# Get one component by exact name
+def get_component(_db=None, name=None):
+    if name is None:
+        name = _db
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM components WHERE LOWER(name)=LOWER(?)",
+        (name,),
     )
+    row = cursor.fetchone()
+    conn.close()
+    return row
 
-
-# ============================================================
-# GET COMPONENT BY NAME
-# ============================================================
-
-def get_component(db: Session, name: str):
-
-    return (
-        db.query(InventoryItem)
-        .filter(
-            func.lower(InventoryItem.name)
-            == name.strip().lower()
-        )
-        .first()
+# Search inventory
+def search_inventory(_db=None, query=None):
+    if query is None:
+        query = _db
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT * FROM components
+        WHERE LOWER(name) LIKE LOWER(?)
+           OR LOWER(category) LIKE LOWER(?)
+           OR LOWER(supplier) LIKE LOWER(?)
+        ORDER BY name
+        """,
+        (f"%{query}%", f"%{query}%", f"%{query}%")
     )
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
 
-
-# ============================================================
-# SEARCH INVENTORY
-# ============================================================
-
-def search_inventory(db: Session, query: str):
-
-    search_term = f"%{query.strip()}%"
-
-    return (
-        db.query(InventoryItem)
-        .filter(
-            InventoryItem.name.ilike(search_term)
-            |
-            InventoryItem.category.ilike(search_term)
-        )
-        .order_by(InventoryItem.name)
-        .all()
+# Low stock items
+def get_low_stock_items(_db=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM components WHERE stock <= min_stock ORDER BY stock ASC"
     )
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
 
+# Inventory statistics
+def get_inventory_stats(_db=None):
+    conn = get_connection()
+    cursor = conn.cursor()
 
-# ============================================================
-# LOW STOCK ITEMS
-# ============================================================
+    cursor.execute("SELECT COUNT(*) FROM components")
+    total_components = cursor.fetchone()[0]
 
-def get_low_stock_items(db: Session):
+    cursor.execute("SELECT SUM(stock) FROM components")
+    total_units = cursor.fetchone()[0] or 0
 
-    return (
-        db.query(InventoryItem)
-        .filter(
-            InventoryItem.stock
-            <= InventoryItem.min_stock
-        )
-        .order_by(InventoryItem.stock)
-        .all()
-    )
+    cursor.execute("SELECT COUNT(*) FROM components WHERE stock <= min_stock")
+    low_stock = cursor.fetchone()[0]
 
-
-# ============================================================
-# GET INVENTORY STATISTICS
-# ============================================================
-
-def get_inventory_stats(db: Session):
-
-    total_products = (
-        db.query(InventoryItem)
-        .count()
-    )
-
-    low_stock_items = (
-        db.query(InventoryItem)
-        .filter(
-            InventoryItem.stock
-            <= InventoryItem.min_stock
-        )
-        .count()
-    )
-
-    suppliers = (
-        db.query(
-            func.count(
-                func.distinct(
-                    InventoryItem.supplier
-                )
-            )
-        )
-        .scalar()
-    )
-
-    categories = (
-        db.query(
-            func.count(
-                func.distinct(
-                    InventoryItem.category
-                )
-            )
-        )
-        .scalar()
-    )
+    conn.close()
 
     return {
-        "total_products": total_products,
-        "low_stock_items": low_stock_items,
-        "suppliers": suppliers or 0,
-        "categories": categories or 0,
+        "total_components": total_components,
+        "total_units": total_units,
+        "low_stock": low_stock,
     }
 
+# Create reorder request
+def create_reorder_request(_db=None, component_name=None, quantity=None):
+    if quantity is None:
+        quantity = component_name
+        component_name = _db
 
-# ============================================================
-# CREATE REORDER REQUEST
-# ============================================================
+    component = get_component(component_name)
 
-def create_reorder_request(
-    db: Session,
-    item_id: int,
-    quantity: int,
-):
+    if not component:
+        return False
 
-    item = (
-        db.query(InventoryItem)
-        .filter(
-            InventoryItem.id == item_id
-        )
-        .first()
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO reorder_requests
+        (component_name, supplier, quantity, status)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            component["name"],
+            component["supplier"],
+            quantity,
+            "Pending",
+        ),
     )
 
-    if not item:
-        return None
+    conn.commit()
+    conn.close()
 
-    if quantity <= 0:
-        raise ValueError(
-            "Reorder quantity must be greater than 0."
-        )
+    return True
 
-    reorder = ReorderRequest(
-        item_id=item.id,
-        quantity=quantity,
-        supplier=item.supplier,
-        status="Pending",
+# Get reorder requests
+def get_reorder_requests(_db=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM reorder_requests ORDER BY id DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+# Update stock
+def update_stock(_db=None, component_name=None, new_stock=None):
+    if new_stock is None:
+        new_stock = component_name
+        component_name = _db
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "UPDATE components SET stock=? WHERE LOWER(name)=LOWER(?)",
+        (new_stock, component_name),
     )
 
-    db.add(reorder)
-    db.commit()
-    db.refresh(reorder)
+    conn.commit()
+    updated = cursor.rowcount > 0
+    conn.close()
 
-    return reorder
-
-
-# ============================================================
-# GET ALL REORDER REQUESTS
-# ============================================================
-
-def get_reorder_requests(db: Session):
-
-    return (
-        db.query(ReorderRequest)
-        .order_by(
-            ReorderRequest.created_at.desc()
-        )
-        .all()
-    )
-
-
-# ============================================================
-# UPDATE STOCK
-# ============================================================
-
-def update_stock(
-    db: Session,
-    item_id: int,
-    new_stock: int,
-):
-
-    item = (
-        db.query(InventoryItem)
-        .filter(
-            InventoryItem.id == item_id
-        )
-        .first()
-    )
-
-    if not item:
-        return None
-
-    if new_stock < 0:
-        raise ValueError(
-            "Stock cannot be negative."
-        )
-
-    item.stock = new_stock
-
-    db.commit()
-    db.refresh(item)
-
-    return item
+    return updated

@@ -1,0 +1,53 @@
+ESP32-CAM
+
+The ESP32-CAM is a compact Wi-Fi and Bluetooth enabled camera module based on the ESP32 microcontroller. It is commonly used for IoT surveillance systems, face recognition, remote monitoring, smart doorbells, and image capture applications.
+
+Key features:
+- Built-in OV2640 camera
+- Wi-Fi and Bluetooth connectivity
+- MicroSD card support
+- Low power operation
+- Suitable for embedded vision applications
+
+Common applications:
+- Security cameras
+- Smart home monitoring
+- Attendance systems
+- AI and computer vision projects
+
+
+ESP32 DevKit V1
+
+The ESP32 DevKit V1 is a development board built around the ESP32 microcontroller. It provides dual-core processing, Wi-Fi, Bluetooth, multiple GPIO pins, ADC, DAC, PWM, SPI, I2C, and UART interfaces.
+
+Key features:
+- Dual-core ESP32 processor
+- Wi-Fi and Bluetooth support
+- USB programming interface
+- Multiple digital and analog pins
+- Excellent for IoT prototyping
+
+Common applications:
+- Home automation
+- Sensor networks
+- Robotics
+- Industrial IoT
+- Smart energy monitoring
+
+
+ESP8266 NodeMCU
+
+The ESP8266 NodeMCU is a low-cost Wi-Fi enabled development board based on the ESP8266 microcontroller. It is widely used for IoT projects requiring wireless connectivity.
+
+Key features:
+- Built-in Wi-Fi
+- USB programming
+- Easy Arduino IDE support
+- Compact and inexpensive
+- Good for basic IoT projects
+
+Common applications:
+- Wi-Fi sensor nodes
+- Smart switches
+- Weather stations
+- IoT learning projects

@@ -1,18 +1,19 @@
-import os
-from dotenv import load_dotenv
+import asyncio
+from google import genai
 
-from langchain.agents import create_agent
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.tools import tool
-
+from config import GEMINI_API_KEY, GEMINI_MODEL
 from rag_service import retrieve
-from inventory_service import (
+from services.inventory_service import (
+    get_component,
     get_low_stock_items,
-    find_product,
-    reorder_product,
+    create_reorder_request,
 )
 
-load_dotenv()
+# ============================================================
+# GEMINI CLIENT
+# ============================================================
+
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ============================================================
 # SYSTEM PROMPT
@@ -23,155 +24,165 @@ You are an AI assistant for an IoT hardware inventory management system.
 
 You are friendly, conversational, concise, and helpful.
 
-Use the knowledge base for company/product information.
-
-Use the inventory tools for live stock information.
-
-Never invent inventory quantities.
-
-Answer naturally like ChatGPT.
+Rules:
+- Answer naturally like ChatGPT.
+- Use the knowledge base for company/product information.
+- Use inventory data for stock-related questions.
+- Never invent inventory quantities.
+- If inventory information is unavailable, clearly say so.
 """
 
 # ============================================================
-# GEMINI
+# KNOWLEDGE SEARCH
 # ============================================================
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=os.getenv("GEMINI_API_KEY"),
-    temperature=0.3,
-    max_retries=2,
-)
-
-# ============================================================
-# KNOWLEDGE TOOL
-# ============================================================
-
-@tool
-def knowledge_base(query: str) -> str:
-    """Search the company knowledge base."""
-
+def search_knowledge(query: str) -> str:
     results = retrieve(query)
 
     if not results:
-        return "No relevant information was found in the knowledge base."
+        return "No relevant information found in the knowledge base."
 
     return "\n\n".join(
-        f"Source: {r['source']}\nContent: {r['text']}"
+        f"Source: {r['source']}\n{r['text']}"
         for r in results
     )
 
 # ============================================================
-# INVENTORY TOOLS
+# INVENTORY LOOKUP
 # ============================================================
 
-@tool
 def inventory_lookup(product_name: str) -> str:
-    """Look up live inventory information for a product."""
-
-    product = find_product(product_name)
+    product = get_component(product_name)
 
     if not product:
-        return f"{product_name} not found in inventory."
+        return f"{product_name} was not found in inventory."
 
     return (
-        f"Product: {product['name']}\n"
-        f"Stock: {product['stock']} units\n"
-        f"Minimum stock: {product['min_stock']}\n"
-        f"Supplier: {product['supplier']}"
+        f"{product['name']} currently has {product['stock']} units in stock.\n"
+        f"Minimum stock level: {product['min_stock']} units.\n"
+        f"Supplier: {product['supplier']}."
     )
 
+# ============================================================
+# LOW STOCK
+# ============================================================
 
-@tool
 def low_stock_inventory() -> str:
-    """Show all low-stock inventory items."""
-
     items = get_low_stock_items()
 
     if not items:
-        return "No low stock items found."
+        return "There are currently no low-stock items."
 
     return "\n".join(
-        f"- {item['name']}: {item['stock']} units"
+        f"- {item.name}: {item.stock} units"
         for item in items
     )
 
+# ============================================================
+# REORDER
+# ============================================================
 
-@tool
 def create_reorder(product_name: str) -> str:
-    """Create a reorder request for a product."""
+    success = create_reorder_request(product_name, 25)
 
-    return reorder_product(product_name)
+    if not success:
+        return f"{product_name} was not found in inventory."
 
+    return f"Reorder request created successfully for {product_name} (25 units)."
 # ============================================================
-# AGENT
-# ============================================================
-
-agent = None
-
-
-async def get_agent():
-    global agent
-
-    if agent is None:
-
-        all_tools = [
-            knowledge_base,
-            inventory_lookup,
-            low_stock_inventory,
-            create_reorder,
-        ]
-
-        print("\nLangChain tools loaded:")
-
-        for tool_item in all_tools:
-            print(f"- {tool_item.name}")
-
-        agent = create_agent(
-            model=llm,
-            tools=all_tools,
-            system_prompt=SYSTEM_PROMPT,
-        )
-
-    return agent
-
-# ============================================================
-# ASK AGENT
+# MAIN CHAT FUNCTION
 # ============================================================
 
 async def ask_agent(message: str) -> str:
-    current_agent = await get_agent()
+    lower = message.lower()
 
-    result = await current_agent.ainvoke(
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": message,
-                }
-            ]
-        }
+    # Low stock query
+    if "low stock" in lower:
+        return low_stock_inventory()
+
+    # Product aliases
+    product_aliases = {
+        "esp32 cam": "ESP32-CAM",
+        "esp32-cam": "ESP32-CAM",
+        "esp32 devkit": "ESP32 DevKit V1",
+        "esp32 devkit v1": "ESP32 DevKit V1",
+        "esp8266": "ESP8266 NodeMCU",
+        "nodemcu": "ESP8266 NodeMCU",
+        "esp8266 nodemcu": "ESP8266 NodeMCU",
+    }
+
+    # Check if any product name is mentioned
+    for alias, product in product_aliases.items():
+        if alias in lower:
+            if "reorder" in lower:
+                return create_reorder(product)
+
+            # For any stock-related question
+            if any(word in lower for word in [
+                "stock", "inventory", "available",
+                "quantity", "amount", "units"
+            ]):
+                return inventory_lookup(product)
+
+    # Knowledge base
+    knowledge_context = search_knowledge(message)
+
+    prompt = f"""
+{SYSTEM_PROMPT}
+
+Knowledge base:
+{knowledge_context}
+
+User: {message}
+
+Answer naturally and conversationally.
+"""
+
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
     )
 
-    final_message = result["messages"][-1]
-    content = final_message.content
+    return response.text
 
-    if isinstance(content, str):
-        return content
+    # Knowledge base search
+    knowledge_context = search_knowledge(message)
 
-    if isinstance(content, list):
-        text_parts = []
+    prompt = f"""
+{SYSTEM_PROMPT}
 
-        for item in content:
-            if isinstance(item, dict):
-                text = item.get("text")
-                if text:
-                    text_parts.append(text)
+Knowledge base:
+{knowledge_context}
 
-        if text_parts:
-            return "\n".join(text_parts)
+User: {message}
 
-    return str(content)
+Answer naturally and conversationally.
+"""
+
+    # Gemini response with fallback
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+        )
+        return response.text
+
+    except Exception as e:
+        print(f"Gemini primary model failed: {e}")
+
+        try:
+            response = client.models.generate_content(
+                model="models/gemini-2.5-flash-lite",
+                contents=prompt,
+            )
+            return response.text
+
+        except Exception as e2:
+            print(f"Gemini fallback failed: {e2}")
+            return (
+                "The AI service is temporarily unavailable due to high demand. "
+                "Please try again in a few moments."
+            )
 
 # ============================================================
 # COMMAND LINE TEST
@@ -179,33 +190,17 @@ async def ask_agent(message: str) -> str:
 
 if __name__ == "__main__":
 
-    import asyncio
-
     async def main():
-
-        print("\nInventory AI Agent")
+        print("Inventory AI Agent")
         print("Type 'exit' to quit.\n")
 
         while True:
+            msg = input("You: ").strip()
 
-            message = input("You: ").strip()
-
-            if message.lower() == "exit":
+            if msg.lower() == "exit":
                 break
 
-            if not message:
-                continue
-
-            try:
-
-                answer = await ask_agent(message)
-
-                print(f"\nAssistant: {answer}\n")
-
-            except Exception as error:
-
-                print("\nAgent error:")
-                print(repr(error))
-                print()
+            answer = await ask_agent(msg)
+            print(f"\nAssistant: {answer}\n")
 
     asyncio.run(main())
