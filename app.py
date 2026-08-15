@@ -19,9 +19,7 @@ from sqlalchemy.orm import Session
 
 from pydantic import BaseModel, Field
 
-from models import (
-    get_db,
-)
+from models import get_db
 
 from services.inventory_service import (
     get_all_inventory,
@@ -38,6 +36,7 @@ from auth import oauth
 from config import SESSION_SECRET
 
 import agent_service
+
 
 # ============================================================
 # FASTAPI APP
@@ -88,9 +87,7 @@ templates = Jinja2Templates(
 # ============================================================
 
 class ReorderRequestBody(BaseModel):
-
     item_id: int
-
     quantity: int = Field(
         gt=0,
         description="Quantity to reorder",
@@ -98,7 +95,6 @@ class ReorderRequestBody(BaseModel):
 
 
 class StockUpdateBody(BaseModel):
-
     stock: int = Field(
         ge=0,
         description="New stock quantity",
@@ -106,7 +102,6 @@ class StockUpdateBody(BaseModel):
 
 
 class ChatRequest(BaseModel):
-
     message: str
 
 
@@ -118,15 +113,10 @@ def inventory_to_dict(item):
 
     return {
         "id": item.id,
-
         "name": item.name,
-
         "category": item.category,
-
         "stock": item.stock,
-
         "min_stock": item.min_stock,
-
         "supplier": item.supplier,
 
         # Frontend expects last_updated.
@@ -461,13 +451,9 @@ def components_by_category(
     items = get_all_inventory(db)
 
     matching_items = [
-
         item
-
         for item in items
-
         if item.category
-
         and item.category.lower()
         == category.strip().lower()
     ]
@@ -542,7 +528,6 @@ def change_stock(
         )
 
     return {
-
         "message":
             "Stock updated successfully.",
 
@@ -615,35 +600,44 @@ def reorders(
 # CHAT API
 # ============================================================
 
-# ============================================================
-# CHAT API
-# ============================================================
-
 @app.post("/api/chat")
 async def chat_api(
     data: ChatRequest,
+    db: Session = Depends(get_db),
 ):
+
     message = data.message.strip()
 
     if not message:
+
         raise HTTPException(
             status_code=400,
             detail="Message cannot be empty.",
         )
 
     try:
-        answer = await agent_service.ask_agent(message)
+
+        # IMPORTANT:
+        # Pass the database session to the AI agent.
+        answer = await agent_service.ask_agent(
+            message,
+            db,
+        )
 
         return {
             "type": "ai",
             "answer": answer,
             "message": answer,
             "data": [],
-            "sources": ["langchain_agent"],
+            "sources": [
+                "live_inventory",
+                "knowledge_base",
+            ],
             "mode": "agent",
         }
 
     except Exception as exc:
+
         print(
             "Chat agent error:",
             repr(exc),
@@ -655,7 +649,6 @@ async def chat_api(
         )
 
 
-
 # ============================================================
 # HEALTH CHECK
 # ============================================================
@@ -664,11 +657,15 @@ async def chat_api(
 def health():
 
     return {
-
-        "status":
-            "ok",
-
-        "service":
-            "inventory-management-system",
+        "status": "ok",
+        "service": "inventory-management-system",
     }
-#python -m uvicorn app:app --reload --port 8001
+
+
+# ============================================================
+# RUN
+# ============================================================
+
+# Start with:
+#
+# python -m uvicorn app:app --reload --port 8001
