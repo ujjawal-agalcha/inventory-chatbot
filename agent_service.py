@@ -19,6 +19,13 @@ from services.inventory_service import (
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
+from config import GEMINI_API_KEY, GEMINI_MODEL
+
+print("MODEL:", GEMINI_MODEL)
+print("KEY PREFIX:", GEMINI_API_KEY[:8])
+
+client = genai.Client(api_key=GEMINI_API_KEY)
+
 
 # ============================================================
 # SYSTEM PROMPT
@@ -298,7 +305,7 @@ Answer naturally and conversationally.
         try:
 
             response = client.models.generate_content(
-                model="models/gemini-2.5-flash-lite",
+                model="models/gemini-3.5-flash",
                 contents=prompt,
             )
 
