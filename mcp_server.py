@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 from fastmcp import FastMCP
 
 from models import SessionLocal

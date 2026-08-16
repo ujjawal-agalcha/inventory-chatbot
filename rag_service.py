@@ -2,9 +2,13 @@ import os
 import re
 from pathlib import Path
 
+# pyrefly: ignore [missing-import]
 import faiss
+# pyrefly: ignore [missing-import]
 import numpy as np
+# pyrefly: ignore [missing-import]
 from sentence_transformers import SentenceTransformer
+# pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 
 

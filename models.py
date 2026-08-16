@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 from sqlalchemy import (
     create_engine,
     Column,
@@ -6,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
 )
+# pyrefly: ignore [missing-import]
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from datetime import datetime
 

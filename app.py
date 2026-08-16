@@ -1,3 +1,7 @@
+import os
+import logging
+
+# pyrefly: ignore [missing-import]
 from fastapi import (
     FastAPI,
     Request,
@@ -5,18 +9,24 @@ from fastapi import (
     HTTPException,
 )
 
+# pyrefly: ignore [missing-import]
 from fastapi.responses import (
     HTMLResponse,
     RedirectResponse,
 )
 
+# pyrefly: ignore [missing-import]
 from fastapi.templating import Jinja2Templates
+# pyrefly: ignore [missing-import]
 from fastapi.staticfiles import StaticFiles
 
+# pyrefly: ignore [missing-import]
 from starlette.middleware.sessions import SessionMiddleware
 
+# pyrefly: ignore [missing-import]
 from sqlalchemy.orm import Session
 
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel, Field
 
 from models import get_db
@@ -36,6 +46,11 @@ from auth import oauth
 from config import SESSION_SECRET
 
 import agent_service
+
+logger = logging.getLogger("app")
+
+# Dev mode: skip OAuth if DEV_MODE is set
+DEV_MODE = os.getenv("DEV_MODE", "false").lower() in ("true", "1", "yes")
 
 
 # ============================================================
@@ -169,7 +184,7 @@ async def root(request: Request):
 
     user = request.session.get("user")
 
-    if user:
+    if user or DEV_MODE:
 
         return RedirectResponse(
             url="/chat",
@@ -188,6 +203,18 @@ async def root(request: Request):
 
 @app.get("/login")
 async def login(request: Request):
+
+    # Dev mode: skip OAuth and go straight to chat
+    if DEV_MODE:
+        request.session["user"] = {
+            "name": "Developer",
+            "email": "dev@localhost",
+            "username": "developer",
+        }
+        return RedirectResponse(
+            url="/chat",
+            status_code=303,
+        )
 
     redirect_uri = request.url_for(
         "auth_callback"
@@ -290,12 +317,20 @@ async def chat(
 
     user = request.session.get("user")
 
+    # Dev-mode bypass: auto-create a dev user session.
     if not user:
-
-        return RedirectResponse(
-            url="/login",
-            status_code=303,
-        )
+        if DEV_MODE:
+            user = {
+                "name": "Developer",
+                "email": "dev@localhost",
+                "username": "developer",
+            }
+            request.session["user"] = user
+        else:
+            return RedirectResponse(
+                url="/login",
+                status_code=303,
+            )
 
     stats = get_inventory_stats(db)
 
@@ -617,18 +652,24 @@ async def chat_api(
 
     try:
 
-        # IMPORTANT:
-        # Pass the database session to the AI agent.
-        answer = await agent_service.ask_agent(
+        # The agent now returns a structured dict:
+        # { type, message, data }
+        result = await agent_service.ask_agent(
             message,
             db,
         )
 
+        logger.info(
+            "[CHAT] User: %s | Type: %s",
+            message,
+            result.get("type", "ai"),
+        )
+
         return {
-            "type": "ai",
-            "answer": answer,
-            "message": answer,
-            "data": [],
+            "type": result.get("type", "ai"),
+            "message": result.get("message", ""),
+            "answer": result.get("message", ""),
+            "data": result.get("data", []),
             "sources": [
                 "live_inventory",
                 "knowledge_base",
@@ -638,8 +679,8 @@ async def chat_api(
 
     except Exception as exc:
 
-        print(
-            "Chat agent error:",
+        logger.error(
+            "Chat agent error: %s",
             repr(exc),
         )
 
