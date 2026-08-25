@@ -1,43 +1,20 @@
 import sqlite3
+import logging
+from config import DATABASE_PATH
+from models import engine, SessionLocal, get_db, init_models
 
-DATABASE = "inventory.db"
+logger = logging.getLogger("database")
 
 def get_connection():
-    conn = sqlite3.connect(DATABASE)
+    """Direct sqlite3 connection to canonical inventory.db if needed."""
+    conn = sqlite3.connect(str(DATABASE_PATH))
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
-    conn = get_connection()
-    cursor = conn.cursor()
+    """Idempotent database initialization using SQLAlchemy models."""
+    logger.info("Initializing database at: %s", DATABASE_PATH)
+    init_models()
 
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS components (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            category TEXT NOT NULL,
-            stock INTEGER NOT NULL,
-            min_stock INTEGER NOT NULL,
-            supplier TEXT NOT NULL,
-            last_updated TEXT NOT NULL
-        )
-        """
-    )
-
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS reorder_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            component_name TEXT NOT NULL,
-            supplier TEXT NOT NULL,
-            quantity INTEGER NOT NULL,
-            status TEXT NOT NULL
-        )
-        """
-    )
-
-    conn.commit()
-    conn.close()
-
-init_db()
+if __name__ == "__main__":
+    init_db()

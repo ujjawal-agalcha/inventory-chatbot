@@ -1,22 +1,27 @@
+import uuid
+import logging
+from datetime import datetime
 # pyrefly: ignore [missing-import]
 from sqlalchemy import (
     create_engine,
     Column,
     Integer,
     String,
+    Text,
     DateTime,
     ForeignKey,
 )
 # pyrefly: ignore [missing-import]
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
-from datetime import datetime
 
+from config import DATABASE_URL, DATABASE_PATH
+
+logger = logging.getLogger("database")
+logger.info("Using database: %s", DATABASE_PATH)
 
 # ============================================================
 # DATABASE CONFIGURATION
 # ============================================================
-
-DATABASE_URL = "sqlite:///./inventory.db"
 
 engine = create_engine(
     DATABASE_URL,
@@ -30,6 +35,157 @@ SessionLocal = sessionmaker(
 )
 
 Base = declarative_base()
+
+
+# ============================================================
+# USER MODEL
+# ============================================================
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(
+        String,
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+        index=True,
+    )
+
+    username = Column(
+        String,
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    email = Column(
+        String,
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    hashed_password = Column(
+        String,
+        nullable=False,
+    )
+
+    name = Column(
+        String,
+        nullable=False,
+    )
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+    )
+
+    # Relationships
+    conversations = relationship(
+        "Conversation",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+
+# ============================================================
+# CONVERSATION MODEL
+# ============================================================
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id = Column(
+        String,
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+        index=True,
+    )
+
+    user_id = Column(
+        String,
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+
+    title = Column(
+        String,
+        nullable=False,
+        default="New Conversation",
+    )
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+    )
+
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    # Relationships
+    user = relationship(
+        "User",
+        back_populates="conversations",
+    )
+
+    messages = relationship(
+        "Message",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="Message.created_at",
+    )
+
+
+# ============================================================
+# MESSAGE MODEL
+# ============================================================
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id = Column(
+        String,
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+        index=True,
+    )
+
+    conversation_id = Column(
+        String,
+        ForeignKey("conversations.id"),
+        nullable=False,
+        index=True,
+    )
+
+    role = Column(
+        String,
+        nullable=False,  # "user", "assistant", "system"
+    )
+
+    content = Column(
+        Text,
+        nullable=False,
+    )
+
+    extra_data = Column(
+        Text,
+        nullable=True,  # JSON string with component / inventory payload
+    )
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+    )
+
+    # Relationship
+    conversation = relationship(
+        "Conversation",
+        back_populates="messages",
+    )
 
 
 # ============================================================
@@ -144,9 +300,10 @@ class ReorderRequest(Base):
 # CREATE DATABASE TABLES
 # ============================================================
 
-Base.metadata.create_all(
-    bind=engine
-)
+def init_models():
+    Base.metadata.create_all(bind=engine)
+
+init_models()
 
 
 # ============================================================
@@ -155,9 +312,7 @@ Base.metadata.create_all(
 
 def get_db():
     db = SessionLocal()
-
     try:
         yield db
-
     finally:
         db.close()

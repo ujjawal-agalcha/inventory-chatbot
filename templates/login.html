@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Inventory AI System</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body class="auth-body">
+
+<div class="auth-container">
+    <div class="auth-card">
+        <div class="auth-header">
+            <div class="brand-logo" style="margin: 0 auto 16px;">IMS</div>
+            <h2>Inventory AI Assistant</h2>
+            <p>Sign in or create an account to access inventory intelligence</p>
+        </div>
+
+        <div class="auth-tabs">
+            <button class="auth-tab active" id="tab-login" onclick="switchAuthTab('login')">Sign In</button>
+            <button class="auth-tab" id="tab-register" onclick="switchAuthTab('register')">Register</button>
+        </div>
+
+        <div id="auth-alert" class="auth-alert" style="display: none;"></div>
+
+        <!-- Login Form -->
+        <form id="login-form" class="auth-form" onsubmit="handleLogin(event)">
+            <div class="form-group">
+                <label for="login-username">Username or Email</label>
+                <input type="text" id="login-username" placeholder="admin" required autofocus>
+            </div>
+
+            <div class="form-group">
+                <label for="login-password">Password</label>
+                <input type="password" id="login-password" placeholder="••••••••" required>
+            </div>
+
+            <button type="submit" class="auth-submit-btn" id="login-btn">
+                Sign In
+            </button>
+            <div class="auth-hint">Default admin credentials: <code>admin</code> / <code>admin123</code></div>
+        </form>
+
+        <!-- Register Form -->
+        <form id="register-form" class="auth-form" style="display: none;" onsubmit="handleRegister(event)">
+            <div class="form-group">
+                <label for="reg-name">Full Name</label>
+                <input type="text" id="reg-name" placeholder="John Doe" required>
+            </div>
+
+            <div class="form-group">
+                <label for="reg-username">Username</label>
+                <input type="text" id="reg-username" placeholder="johndoe" required>
+            </div>
+
+            <div class="form-group">
+                <label for="reg-email">Email Address</label>
+                <input type="email" id="reg-email" placeholder="john@example.com" required>
+            </div>
+
+            <div class="form-group">
+                <label for="reg-password">Password</label>
+                <input type="password" id="reg-password" placeholder="At least 4 characters" required minlength="4">
+            </div>
+
+            <button type="submit" class="auth-submit-btn" id="register-btn">
+                Create Account
+            </button>
+        </form>
+    </div>
+</div>
+
+<script>
+function switchAuthTab(tab) {
+    const loginForm = document.getElementById('login-form');
+    const regForm = document.getElementById('register-form');
+    const tabLogin = document.getElementById('tab-login');
+    const tabReg = document.getElementById('tab-register');
+    const alertBox = document.getElementById('auth-alert');
+    alertBox.style.display = 'none';
+
+    if (tab === 'login') {
+        loginForm.style.display = 'flex';
+        regForm.style.display = 'none';
+        tabLogin.classList.add('active');
+        tabReg.classList.remove('active');
+    } else {
+        loginForm.style.display = 'none';
+        regForm.style.display = 'flex';
+        tabReg.classList.add('active');
+        tabLogin.classList.remove('active');
+    }
+}
+
+function showAlert(msg, isError = true) {
+    const alertBox = document.getElementById('auth-alert');
+    alertBox.textContent = msg;
+    alertBox.className = 'auth-alert ' + (isError ? 'error' : 'success');
+    alertBox.style.display = 'block';
+}
+
+async function handleLogin(e) {
+    e.preventDefault();
+    const btn = document.getElementById('login-btn');
+    btn.disabled = true;
+    btn.textContent = 'Signing in...';
+
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value;
+
+    try {
+        const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.detail || 'Login failed.');
+        }
+
+        if (data.token) {
+            localStorage.setItem('access_token', data.token);
+            localStorage.setItem('user', JSON.stringify(data.user));
+        }
+
+        window.location.href = '/chat';
+    } catch (err) {
+        showAlert(err.message || 'Login error');
+        btn.disabled = false;
+        btn.textContent = 'Sign In';
+    }
+}
+
+async function handleRegister(e) {
+    e.preventDefault();
+    const btn = document.getElementById('register-btn');
+    btn.disabled = true;
+    btn.textContent = 'Creating account...';
+
+    const name = document.getElementById('reg-name').value.trim();
+    const username = document.getElementById('reg-username').value.trim();
+    const email = document.getElementById('reg-email').value.trim();
+    const password = document.getElementById('reg-password').value;
+
+    try {
+        const res = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, username, email, password })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.detail || 'Registration failed.');
+        }
+
+        if (data.token) {
+            localStorage.setItem('access_token', data.token);
+            localStorage.setItem('user', JSON.stringify(data.user));
+        }
+
+        window.location.href = '/chat';
+    } catch (err) {
+        showAlert(err.message || 'Registration error');
+        btn.disabled = false;
+        btn.textContent = 'Create Account';
+    }
+}
+</script>
+
+</body>
+</html>

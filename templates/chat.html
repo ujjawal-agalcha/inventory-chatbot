@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inventory Management Dashboard</title>
+    <title>Inventory Management Dashboard & AI Assistant</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -15,35 +15,41 @@
 
     <!-- Sidebar -->
     <aside class="sidebar">
-        <div class="brand">
-            <div class="brand-logo">IMS</div>
-            <div class="brand-text">
-                <h2>Inventory AI</h2>
-                <p>Management Dashboard</p>
+        <div>
+            <div class="brand">
+                <div class="brand-logo">IMS</div>
+                <div class="brand-text">
+                    <h2>Inventory AI</h2>
+                    <p>Management Dashboard</p>
+                </div>
+            </div>
+
+            <!-- New Chat Button -->
+            <button class="new-chat-btn" onclick="startNewConversation()">
+                <span class="icon">+</span> New Chat
+            </button>
+
+            <!-- Conversations List -->
+            <div class="sidebar-section-title">
+                <span>Recent Chats</span>
+            </div>
+            <div id="conversation-list" class="conversation-list">
+                <div class="conv-item-loading">Loading conversations...</div>
             </div>
         </div>
 
-        <nav class="sidebar-nav">
-            <a href="#" class="active">Dashboard</a>
-            <a href="#">Inventory</a>
-            <a href="#">Categories</a>
-            <a href="#">Suppliers</a>
-            <a href="#">Reorder Requests</a>
-            <a href="#">Analytics</a>
-        </nav>
-
         <div class="sidebar-footer">
             <div class="user-card">
-                <div class="user-avatar">
+                <div class="user-avatar" id="sidebar-avatar">
                     {{ user.name[0] if user.name else "A" }}
                 </div>
-                <div>
-                    <div class="user-name">{{ user.name }}</div>
+                <div style="overflow: hidden;">
+                    <div class="user-name" id="sidebar-name">{{ user.name }}</div>
                     <div class="user-role">Administrator</div>
                 </div>
             </div>
 
-            <a href="/logout" class="logout-btn">Logout</a>
+            <a href="/logout" class="logout-btn" onclick="handleLogout(event)">Sign Out</a>
         </div>
     </aside>
 
@@ -53,36 +59,20 @@
         <!-- Header -->
         <header class="top-header">
             <div>
-                <h1>Inventory Management</h1>
-                <p>AI-powered inventory monitoring and stock intelligence</p>
+                <h1>Inventory Intelligence</h1>
+                <p>Real-time hardware stock monitoring and AI assistant</p>
             </div>
 
             <div class="header-actions">
-                <button class="notify-btn">
-                    Low Stock Alerts
+                <div id="ws-status" class="ws-status connecting">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Connecting...</span>
+                </div>
+                <button class="notify-btn" onclick="quickAsk('Which items are low stock?')">
+                    Low Stock Alerts ({{ stats.low_stock if stats else '0' }})
                 </button>
             </div>
         </header>
-
-        <!-- Hero -->
-        <section class="hero-card">
-            <div class="hero-content">
-                <div>
-                    <span class="hero-badge">AI Inventory Assistant</span>
-                    <h2>Welcome back, {{ user.name }}</h2>
-                    <p>
-                        Monitor inventory levels, identify low-stock components,
-                        manage suppliers, and interact with the AI assistant
-                        using natural language.
-                    </p>
-                </div>
-
-                <div class="hero-actions">
-                    <button class="primary-btn">View Inventory</button>
-                    <button class="secondary-btn">Generate Report</button>
-                </div>
-            </div>
-        </section>
 
         <!-- Stats -->
         <section class="stats-grid">
@@ -90,7 +80,7 @@
                 <div class="stat-icon blue">📦</div>
                 <div class="stat-info">
                     <span>Total Products</span>
-                    <h3>124</h3>
+                    <h3 id="stat-total">{{ stats.total_components if stats else '39' }}</h3>
                     <small>Across all categories</small>
                 </div>
             </div>
@@ -98,8 +88,8 @@
             <div class="stat-card">
                 <div class="stat-icon red">⚠</div>
                 <div class="stat-info">
-                    <span>Low Stock</span>
-                    <h3>8</h3>
+                    <span>Low Stock Items</span>
+                    <h3 id="stat-low">{{ stats.low_stock if stats else '10' }}</h3>
                     <small>Require attention</small>
                 </div>
             </div>
@@ -107,9 +97,9 @@
             <div class="stat-card">
                 <div class="stat-icon green">🚚</div>
                 <div class="stat-info">
-                    <span>Suppliers</span>
-                    <h3>18</h3>
-                    <small>Active vendors</small>
+                    <span>Total Units</span>
+                    <h3 id="stat-units">{{ stats.total_units if stats else '0' }}</h3>
+                    <small>Live warehouse count</small>
                 </div>
             </div>
 
@@ -117,8 +107,8 @@
                 <div class="stat-icon purple">📂</div>
                 <div class="stat-info">
                     <span>Categories</span>
-                    <h3>6</h3>
-                    <small>Inventory groups</small>
+                    <h3>10</h3>
+                    <small>Hardware divisions</small>
                 </div>
             </div>
         </section>
@@ -130,7 +120,7 @@
             <div class="categories-panel">
                 <div class="panel-header">
                     <h3>Browse Categories</h3>
-                    <p>Select a category to explore components and stock</p>
+                    <p>Select a category to inspect components and stock</p>
                 </div>
 
                 <div id="category-grid" class="category-grid"></div>
@@ -143,39 +133,46 @@
                     <div class="assistant-title">
                         <div class="assistant-icon">AI</div>
                         <div>
-                            <h3>Inventory Assistant</h3>
-                            <p>Ask about stock, suppliers, and components</p>
+                            <h3 id="active-chat-title">Inventory Assistant</h3>
+                            <p id="active-chat-subtitle">Direct SQLite stock lookup & AI intelligence</p>
                         </div>
+                    </div>
+
+                    <div class="chat-header-actions">
+                        <button class="icon-action-btn" title="Rename conversation" onclick="renameCurrentConversation()">✏️</button>
+                        <button class="icon-action-btn delete" title="Delete conversation" onclick="deleteCurrentConversation()">🗑️</button>
                     </div>
                 </div>
 
                 <div class="quick-prompts">
-                    <button onclick="quickAsk('How many ESP32-CAM do we have?')">
-                        ESP32-CAM stock
+                    <button onclick="quickAsk('How many esp32 dev kit are there in stock')">
+                        ESP32 DevKit V1 stock
                     </button>
-                    <button onclick="quickAsk('Show low stock items')">
-                        Low stock
+                    <button onclick="quickAsk('Which items are low stock?')">
+                        Low stock items
                     </button>
-                    <button onclick="quickAsk('Tell me about ESP32-CAM')">
-                        Product info
+                    <button onclick="quickAsk('Who supplies ESP32 DevKit V1?')">
+                        ESP32 supplier
                     </button>
-                    <button onclick="quickAsk('Reorder ESP32-CAM')">
+                    <button onclick="quickAsk('Show all ESP Modules')">
+                        ESP Modules
+                    </button>
+                    <button onclick="quickAsk('Reorder ESP32 DevKit V1')">
                         Create reorder
                     </button>
                 </div>
 
                 <div id="conversation" class="conversation">
-                    <div class="bot-message">
-                        <strong>Inventory Assistant</strong><br><br>
-                        I can help you:
+                    <div class="bot-message" id="welcome-message">
+                        <strong>Inventory AI Assistant</strong><br><br>
+                        I have real-time access to the live SQLite inventory database. I can help you:
                         <ul>
-                            <li>Check live inventory stock</li>
-                            <li>Monitor low-stock items</li>
-                            <li>View supplier information</li>
-                            <li>Create reorder requests</li>
-                            <li>Answer product and inventory questions</li>
+                            <li><strong>Check Live Stock</strong> (e.g. <em>"How many esp32 dev kit are there in stock"</em>)</li>
+                            <li><strong>Track Low Stock</strong> (e.g. <em>"Which items are low stock?"</em>)</li>
+                            <li><strong>Supplier Inquiries</strong> (e.g. <em>"Who supplies ESP32 DevKit V1?"</em>)</li>
+                            <li><strong>Multi-turn Memory</strong> (e.g. <em>"Who supplies it?"</em> after asking about a product)</li>
+                            <li><strong>Create Reorder Requests</strong> for replenishing low stock items</li>
                         </ul>
-                        Try asking: <em>"How many ESP32-CAM do we have?"</em>
                     </div>
                 </div>
 
@@ -183,10 +180,10 @@
                     <input
                         type="text"
                         id="message-input"
-                        placeholder="Ask about inventory, products, or stock..."
+                        placeholder="Ask about inventory, stock, suppliers, or products..."
                         onkeypress="if(event.key==='Enter') sendMessage()"
                     >
-                    <button onclick="sendMessage()" class="send-btn">
+                    <button onclick="sendMessage()" class="send-btn" id="send-btn">
                         Send
                     </button>
                 </div>

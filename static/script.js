@@ -1,2739 +1,672 @@
 // ============================================================
-// INVENTORY MANAGEMENT DASHBOARD - script.js
+// INVENTORY MANAGEMENT & AI ASSISTANT JAVASCRIPT
 // ============================================================
 
-// ============================================================
-// CATEGORY CONFIGURATION
-// ============================================================
-
+// Categories configuration
 const categories = [
-    {
-        name: "ESP Modules",
-        icon: "📡",
-        description: "ESP32, ESP8266 and wireless modules"
-    },
-    {
-        name: "Arduino Boards",
-        icon: "🔌",
-        description: "Arduino Uno, Nano and development boards"
-    },
-    {
-        name: "Motor Drivers",
-        icon: "⚙️",
-        description: "L298N, BTS7960 and motor control modules"
-    },
-    {
-        name: "Motors",
-        icon: "🔧",
-        description: "DC motors, servo motors and stepper motors"
-    },
-    {
-        name: "Sensors",
-        icon: "📊",
-        description: "Ultrasonic, IR, temperature and motion sensors"
-    },
-    {
-        name: "Batteries",
-        icon: "🔋",
-        description: "Li-ion, LiPo and rechargeable battery packs"
-    },
-    {
-        name: "Displays",
-        icon: "🖥️",
-        description: "LCD, OLED and TFT display modules"
-    },
-    {
-        name: "Relays",
-        icon: "🔀",
-        description: "Relay modules and switching components"
-    },
-    {
-        name: "Communication",
-        icon: "📶",
-        description: "Bluetooth, GSM, GPS and communication modules"
-    },
-    {
-        name: "Components",
-        icon: "🔩",
-        description: "Resistors, capacitors, LEDs and electronic components"
-    }
+    { name: "ESP Modules", icon: "📡", description: "ESP32, ESP8266 & wireless boards" },
+    { name: "Arduino Boards", icon: "🔌", description: "Uno R3, Nano, Mega 2560 & Leonardo" },
+    { name: "Motor Drivers", icon: "⚙️", description: "L298N, BTS7960 & TB6612FNG" },
+    { name: "Motors", icon: "🔧", description: "DC gear motors, servos & steppers" },
+    { name: "Sensors", icon: "📊", description: "Ultrasonic, DHT11, PIR & gyroscopes" },
+    { name: "Batteries", icon: "🔋", description: "18650 Li-ion, LiPo & 9V rechargeable" },
+    { name: "Displays", icon: "🖥️", description: "16x2 LCD, 0.96 OLED & TFT displays" },
+    { name: "Relays", icon: "🔀", description: "1-channel & 4-channel relay modules" },
+    { name: "Communication", icon: "📶", description: "Bluetooth HC-05, GSM & GPS modules" },
+    { name: "Components", icon: "🔩", description: "Resistors, capacitors, LEDs & breadboards" }
 ];
 
+// Global State
+let activeConversationId = localStorage.getItem("active_conversation_id") || null;
+let conversations = [];
+let chatSocket = null;
+let reconnectTimer = null;
+let pingInterval = null;
+let isGenerating = false;
+let currentStreamingBubble = null;
+let currentStreamingText = "";
+
 // ============================================================
-// GLOBAL DATA
+// INITIALIZATION
 // ============================================================
 
-let inventory = [];
-let lowStockItems = [];
-let reorderRequests = [];
-
-// Prevent repeated browser notification popups
-let browserNotificationShown = false;
+document.addEventListener("DOMContentLoaded", async () => {
+    initCategories();
+    await loadUser();
+    await loadStats();
+    await loadConversations();
+    connectWebSocket();
+});
 
 // ============================================================
-// HTML ESCAPE
+// AUTH & USER
 // ============================================================
+
+function getToken() {
+    return localStorage.getItem("access_token") || getCookie("access_token");
+}
+
+function getCookie(name) {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop().split(';').shift();
+    return null;
+}
+
+async function loadUser() {
+    try {
+        const token = getToken();
+        const res = await fetch("/api/auth/me", {
+            headers: token ? { "Authorization": `Bearer ${token}` } : {}
+        });
+        if (res.ok) {
+            const user = await res.json();
+            const avatar = document.getElementById("sidebar-avatar");
+            const nameEl = document.getElementById("sidebar-name");
+            if (avatar && user.name) avatar.textContent = user.name.charAt(0).toUpperCase();
+            if (nameEl && user.name) nameEl.textContent = user.name;
+        }
+    } catch (e) {
+        console.warn("Could not fetch user profile:", e);
+    }
+}
+
+function handleLogout(e) {
+    e.preventDefault();
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("user");
+    localStorage.removeItem("active_conversation_id");
+    window.location.href = "/logout";
+}
+
+// ============================================================
+// DASHBOARD STATS & CATEGORIES
+// ============================================================
+
+function initCategories() {
+    const grid = document.getElementById("category-grid");
+    if (!grid) return;
+
+    grid.innerHTML = categories.map(cat => `
+        <div class="category-card" onclick="quickAsk('Show all ${cat.name}')">
+            <div class="category-icon">${cat.icon}</div>
+            <div class="category-info">
+                <h4>${escapeHtml(cat.name)}</h4>
+                <p>${escapeHtml(cat.description)}</p>
+            </div>
+        </div>
+    `).join("");
+}
+
+async function loadStats() {
+    try {
+        const res = await fetch("/api/inventory/stats");
+        if (res.ok) {
+            const stats = await res.json();
+            const elTotal = document.getElementById("stat-total");
+            const elLow = document.getElementById("stat-low");
+            const elUnits = document.getElementById("stat-units");
+            if (elTotal) elTotal.textContent = stats.total_components;
+            if (elLow) elLow.textContent = stats.low_stock;
+            if (elUnits) elUnits.textContent = stats.total_units;
+        }
+    } catch (e) {
+        console.warn("Could not load stats:", e);
+    }
+}
+
+// ============================================================
+// WEBSOCKET CHAT CONNECTION
+// ============================================================
+
+function updateStatus(state, text) {
+    const statusEl = document.getElementById("ws-status");
+    if (!statusEl) return;
+    statusEl.className = `ws-status ${state}`;
+    const textEl = statusEl.querySelector(".status-text");
+    if (textEl) textEl.textContent = text;
+}
+
+function connectWebSocket() {
+    if (chatSocket && (chatSocket.readyState === WebSocket.OPEN || chatSocket.readyState === WebSocket.CONNECTING)) {
+        return;
+    }
+
+    const token = getToken();
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    let wsUrl = `${protocol}//${window.location.host}/ws/chat`;
+    if (token) {
+        wsUrl += `?token=${encodeURIComponent(token)}`;
+    }
+
+    updateStatus("connecting", "Connecting...");
+
+    try {
+        chatSocket = new WebSocket(wsUrl);
+
+        chatSocket.onopen = () => {
+            console.log("[WS] Connected successfully");
+            updateStatus("connected", "Live Connected");
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+
+            // Start Ping Keepalive
+            if (pingInterval) clearInterval(pingInterval);
+            pingInterval = setInterval(() => {
+                if (chatSocket && chatSocket.readyState === WebSocket.OPEN) {
+                    chatSocket.send(JSON.stringify({ type: "ping" }));
+                }
+            }, 25000);
+
+            // Inform server of active conversation
+            if (activeConversationId) {
+                chatSocket.send(JSON.stringify({
+                    type: "init",
+                    conversation_id: activeConversationId
+                }));
+            }
+        };
+
+        chatSocket.onmessage = (event) => {
+            handleWebSocketMessage(event.data);
+        };
+
+        chatSocket.onclose = (event) => {
+            console.warn("[WS] Closed:", event.code, event.reason);
+            updateStatus("disconnected", "Offline (Reconnecting...)");
+            if (pingInterval) clearInterval(pingInterval);
+
+            // Reconnect attempt
+            if (!reconnectTimer) {
+                reconnectTimer = setTimeout(() => {
+                    reconnectTimer = null;
+                    connectWebSocket();
+                }, 3000);
+            }
+        };
+
+        chatSocket.onerror = (err) => {
+            console.error("[WS Error]:", err);
+            updateStatus("disconnected", "Connection Error");
+        };
+
+    } catch (e) {
+        console.error("Failed to initialize WebSocket:", e);
+        updateStatus("disconnected", "Offline");
+    }
+}
+
+// ============================================================
+// WEBSOCKET MESSAGE HANDLER (TOKEN STREAMING)
+// ============================================================
+
+function handleWebSocketMessage(raw) {
+    try {
+        const data = JSON.parse(raw);
+
+        switch (data.type) {
+            case "pong":
+                break;
+
+            case "conversation_created":
+                if (data.conversation) {
+                    activeConversationId = data.conversation.id;
+                    localStorage.setItem("active_conversation_id", activeConversationId);
+                    loadConversations();
+                }
+                break;
+
+            case "message_start":
+                isGenerating = true;
+                currentStreamingText = "";
+                currentStreamingBubble = createStreamingBubble();
+                break;
+
+            case "token":
+                if (!currentStreamingBubble) {
+                    currentStreamingBubble = createStreamingBubble();
+                }
+                currentStreamingText += (data.content || "");
+                renderStreamingContent(currentStreamingBubble, currentStreamingText);
+                scrollToBottom();
+                break;
+
+            case "message_end":
+                isGenerating = false;
+                const finalMsg = data.message || currentStreamingText;
+                if (currentStreamingBubble) {
+                    finalizeStreamingBubble(currentStreamingBubble, finalMsg, data.data, data.data_type);
+                }
+                currentStreamingBubble = null;
+                currentStreamingText = "";
+                scrollToBottom();
+                loadStats();
+                break;
+
+            case "error":
+                isGenerating = false;
+                if (currentStreamingBubble) {
+                    currentStreamingBubble.remove();
+                    currentStreamingBubble = null;
+                }
+                addErrorMessage(data.message || "An unexpected error occurred.");
+                scrollToBottom();
+                break;
+
+            default:
+                console.log("[WS Unknown Event]", data);
+        }
+    } catch (e) {
+        console.error("Error parsing WebSocket message:", e, raw);
+    }
+}
+
+// ============================================================
+// UI MESSAGE RENDERING
+// ============================================================
+
+function scrollToBottom() {
+    const conv = document.getElementById("conversation");
+    if (conv) {
+        conv.scrollTop = conv.scrollHeight;
+    }
+}
 
 function escapeHtml(value) {
+    if (value === null || value === undefined) return "";
     const div = document.createElement("div");
-
-    div.textContent =
-        value === null ||
-        value === undefined
-            ? ""
-            : String(value);
-
+    div.textContent = String(value);
     return div.innerHTML;
 }
 
-// ============================================================
-// API HELPER
-// ============================================================
+function parseMarkdown(text) {
+    if (!text) return "";
+    let html = escapeHtml(text);
 
-async function apiRequest(url, options = {}) {
+    // Bold: **text**
+    html = html.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
 
-    const response = await fetch(url, {
-        ...options,
+    // Italic: *text* or _text_
+    html = html.replace(/\*(.*?)\*/g, "<em>$1</em>");
 
-        headers: {
-            "Accept": "application/json",
-            ...(options.headers || {})
-        }
-    });
+    // Bullet points: lines starting with "- " or "* "
+    html = html.replace(/(?:^|\n)[-*]\s+(.+)/g, "<br>• $1");
 
-    if (!response.ok) {
+    // Line breaks
+    html = html.replace(/\n/g, "<br>");
 
-        let detail = `HTTP ${response.status}`;
-
-        try {
-
-            const data = await response.json();
-
-            if (data.detail) {
-                detail = data.detail;
-            }
-
-            if (data.message) {
-                detail = data.message;
-            }
-
-        } catch (error) {
-            // Ignore JSON parsing errors
-        }
-
-        throw new Error(detail);
-    }
-
-    return await response.json();
+    return html;
 }
-
-// ============================================================
-// MESSAGE HELPERS
-// ============================================================
 
 function addUserMessage(message) {
+    const conv = document.getElementById("conversation");
+    if (!conv) return;
 
-    const conversation =
-        document.getElementById("conversation");
-
-    if (!conversation) {
-        return;
+    // Remove initial welcome if first message
+    const welcome = document.getElementById("welcome-message");
+    if (welcome && conv.children.length === 1) {
+        // keep welcome or let it stay
     }
 
-    const div =
-        document.createElement("div");
-
-    div.className =
-        "user-message";
-
-    div.textContent =
-        message;
-
-    conversation.appendChild(div);
-
-    conversation.scrollTop =
-        conversation.scrollHeight;
+    const div = document.createElement("div");
+    div.className = "user-message";
+    div.textContent = message;
+    conv.appendChild(div);
+    scrollToBottom();
 }
 
-function addBotMessage(message) {
+function createStreamingBubble() {
+    const conv = document.getElementById("conversation");
+    if (!conv) return null;
 
-    const conversation =
-        document.getElementById("conversation");
-
-    if (!conversation) {
-        return;
-    }
-
-    const div =
-        document.createElement("div");
-
-    div.className =
-        "bot-message";
-
-    div.innerHTML =
-        message;
-
-    conversation.appendChild(div);
-
-    conversation.scrollTop =
-        conversation.scrollHeight;
+    const div = document.createElement("div");
+    div.className = "bot-message streaming";
+    div.innerHTML = `<span class="bot-text"></span><span class="cursor-dot">●</span>`;
+    conv.appendChild(div);
+    scrollToBottom();
+    return div;
 }
 
-// ============================================================
-// CREATE LOW STOCK NOTIFICATION AREA
-// ============================================================
-
-function createNotificationArea() {
-
-    let area =
-        document.getElementById(
-            "low-stock-notification"
-        );
-
-    if (area) {
-        return area;
-    }
-
-    area =
-        document.createElement("div");
-
-    area.id =
-        "low-stock-notification";
-
-    area.style.cssText = `
-        margin: 15px 0;
-        padding: 16px;
-        border-radius: 12px;
-        border: 1px solid #fecaca;
-        background: #fff7ed;
-        color: #7f1d1d;
-    `;
-
-    const dashboard =
-        document.querySelector("main") ||
-        document.body;
-
-    dashboard.prepend(area);
-
-    return area;
-}
-
-// ============================================================
-// SHOW LOW STOCK NOTIFICATION
-// ============================================================
-
-function showLowStockNotification() {
-
-    const area =
-        createNotificationArea();
-
-    if (!lowStockItems.length) {
-
-        area.style.display =
-            "none";
-
-        return;
-    }
-
-    area.style.display =
-        "block";
-
-    area.innerHTML = `
-
-        <div style="
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            gap:15px;
-            flex-wrap:wrap;
-        ">
-
-            <div>
-
-                <strong style="
-                    font-size:18px;
-                    color:#b91c1c;
-                ">
-                    ⚠ Low Stock Alert
-                </strong>
-
-                <div style="
-                    margin-top:5px;
-                    color:#7f1d1d;
-                ">
-
-                    ${lowStockItems.length}
-                    item${lowStockItems.length === 1 ? "" : "s"}
-                    need attention.
-
-                </div>
-
-            </div>
-
-            <div style="
-                display:flex;
-                gap:8px;
-                flex-wrap:wrap;
-            ">
-
-                <button
-                    onclick="showAllLowStock()"
-                    style="
-                        background:#dc2626;
-                        color:white;
-                        border:none;
-                        padding:9px 14px;
-                        border-radius:8px;
-                        cursor:pointer;
-                        font-weight:600;
-                    "
-                >
-                    View Low Stock
-                </button>
-
-                <button
-                    onclick="notifyAllLowStock()"
-                    style="
-                        background:#f59e0b;
-                        color:white;
-                        border:none;
-                        padding:9px 14px;
-                        border-radius:8px;
-                        cursor:pointer;
-                        font-weight:600;
-                    "
-                >
-                    🔔 Notify All
-                </button>
-
-            </div>
-
-        </div>
-
-    `;
-}
-
-// ============================================================
-// BROWSER NOTIFICATION PERMISSION
-// ============================================================
-
-async function requestNotificationPermission() {
-
-    if (!("Notification" in window)) {
-        return false;
-    }
-
-    if (Notification.permission === "granted") {
-        return true;
-    }
-
-    if (Notification.permission === "denied") {
-        return false;
-    }
-
-    try {
-
-        const permission =
-            await Notification.requestPermission();
-
-        return permission === "granted";
-
-    } catch (error) {
-
-        console.error(
-            "Notification permission error:",
-            error
-        );
-
-        return false;
+function renderStreamingContent(bubble, text) {
+    const textSpan = bubble.querySelector(".bot-text");
+    if (textSpan) {
+        textSpan.innerHTML = parseMarkdown(text);
     }
 }
 
-// ============================================================
-// SEND LOW STOCK BROWSER NOTIFICATION
-// ============================================================
-
-async function sendLowStockBrowserNotification() {
-
-    if (!lowStockItems.length) {
-        return;
-    }
-
-    if (!("Notification" in window)) {
-        return;
-    }
-
-    if (Notification.permission !== "granted") {
-        return;
-    }
-
-    if (browserNotificationShown) {
-        return;
-    }
-
-    browserNotificationShown = true;
-
-    new Notification(
-        "Inventory Low Stock Alert",
-        {
-            body:
-                `${lowStockItems.length} inventory item(s) are below the minimum stock level.`,
-            icon:
-                "/static/favicon.ico"
-        }
-    );
-}
-
-// ============================================================
-// LOAD INVENTORY
-// ============================================================
-
-async function loadInventory() {
-
-    const categoryGrid =
-        document.getElementById(
-            "category-grid"
-        );
-
-    try {
-
-        inventory =
-            await apiRequest(
-                "/api/inventory"
-            );
-
-        console.log(
-            "Inventory loaded:",
-            inventory
-        );
-
-        updateStatistics();
-
-        renderCategories();
-
-        await loadLowStockFromServer();
-
-        await loadReorderRequests();
-
-    } catch (error) {
-
-        console.error(
-            "Unable to load inventory:",
-            error
-        );
-
-        if (categoryGrid) {
-
-            categoryGrid.innerHTML = `
-
-                <div class="error-message">
-
-                    Unable to load inventory data.
-
-                    <br>
-
-                    <small>
-                        ${escapeHtml(
-                            error.message
-                        )}
-                    </small>
-
-                </div>
-
-            `;
-        }
-    }
-}
-
-// ============================================================
-// LOAD LOW STOCK FROM SERVER
-// ============================================================
-
-async function loadLowStockFromServer() {
-
-    try {
-
-        lowStockItems =
-            await apiRequest(
-                "/api/inventory/low-stock"
-            );
-
-        showLowStockNotification();
-
-        renderLowStock();
-
-    } catch (error) {
-
-        console.error(
-            "Low stock loading error:",
-            error
-        );
-
-        // Fallback to frontend calculation
-        lowStockItems =
-            inventory.filter(
-                item =>
-                    Number(item.stock) <=
-                    Number(item.min_stock)
-            );
-
-        showLowStockNotification();
-
-        renderLowStock();
-    }
-}
-
-// ============================================================
-// UPDATE DASHBOARD STATISTICS
-// ============================================================
-
-function updateStatistics() {
-
-    const totalProducts =
-        inventory.length;
-
-    const lowStock =
-        inventory.filter(
-            item =>
-                Number(item.stock) <=
-                Number(item.min_stock)
-        );
-
-    const suppliers =
-        new Set(
-            inventory
-                .map(
-                    item =>
-                        item.supplier
-                )
-                .filter(Boolean)
-        );
-
-    const categoriesSet =
-        new Set(
-            inventory
-                .map(
-                    item =>
-                        item.category
-                )
-                .filter(Boolean)
-        );
-
-    const totalProductsElement =
-        document.getElementById(
-            "total-products"
-        );
-
-    const lowStockElement =
-        document.getElementById(
-            "low-stock-count"
-        );
-
-    const supplierElement =
-        document.getElementById(
-            "supplier-count"
-        );
-
-    const categoryElement =
-        document.getElementById(
-            "category-count"
-        );
-
-    if (totalProductsElement) {
-        totalProductsElement.textContent =
-            totalProducts;
-    }
-
-    if (lowStockElement) {
-        lowStockElement.textContent =
-            lowStock.length;
-    }
-
-    if (supplierElement) {
-        supplierElement.textContent =
-            suppliers.size;
-    }
-
-    if (categoryElement) {
-        categoryElement.textContent =
-            categoriesSet.size;
-    }
-}
-
-// ============================================================
-// RENDER CATEGORY CARDS
-// ============================================================
-
-function renderCategories() {
-
-    const container =
-        document.getElementById(
-            "category-grid"
-        );
-
-    if (!container) {
-        return;
-    }
-
-    const databaseCategories =
-        [
-            ...new Set(
-                inventory
-                    .map(
-                        item =>
-                            item.category
-                    )
-                    .filter(Boolean)
-            )
-        ].sort();
-
-    if (!databaseCategories.length) {
-
-        container.innerHTML = `
-
-            <div class="empty-message">
-                No inventory categories found.
-            </div>
-
-        `;
-
-        return;
-    }
-
-    container.innerHTML = "";
-
-    databaseCategories.forEach(
-        category => {
-
-            const items =
-                inventory.filter(
-                    item =>
-                        item.category ===
-                        category
-                );
-
-            const categoryInfo =
-                categories.find(
-                    item =>
-                        item.name ===
-                        category
-                );
-
-            const card =
-                document.createElement(
-                    "div"
-                );
-
-            card.className =
-                "category-card";
-
-            card.innerHTML = `
-
-                <div class="category-icon">
-
-                    ${
-                        categoryInfo
-                            ? categoryInfo.icon
-                            : "📦"
-                    }
-
-                </div>
-
-                <h4>
-                    ${escapeHtml(category)}
-                </h4>
-
-                <p>
-
-                    ${
-                        categoryInfo
-                            ? escapeHtml(
-                                categoryInfo.description
-                            )
-                            : `${items.length} component${items.length === 1 ? "" : "s"}`
-                    }
-
-                </p>
-
-                <div style="
-                    margin-top:8px;
-                    font-weight:600;
-                    color:#2563eb;
-                ">
-
-                    ${items.length}
-                    item${items.length === 1 ? "" : "s"}
-
-                </div>
-
-            `;
-
-            card.addEventListener(
-                "click",
-                () => {
-
-                    document
-                        .querySelectorAll(
-                            ".category-card"
-                        )
-                        .forEach(
-                            element => {
-
-                                element.classList.remove(
-                                    "active"
-                                );
-
-                            }
-                        );
-
-                    card.classList.add(
-                        "active"
-                    );
-
-                    showCategory(
-                        category
-                    );
-                }
-            );
-
-            container.appendChild(
-                card
-            );
-        }
-    );
-}
-
-// ============================================================
-// SHOW CATEGORY
-// ============================================================
-
-function showCategory(category) {
-
-    const results =
-        document.getElementById(
-            "inventory-results"
-        );
-
-    const title =
-        document.getElementById(
-            "inventory-results-title"
-        );
-
-    const list =
-        document.getElementById(
-            "inventory-list"
-        );
-
-    if (!results || !title || !list) {
-        return;
-    }
-
-    const items =
-        inventory.filter(
-            item =>
-                item.category ===
-                category
-        );
-
-    results.style.display =
-        "block";
-
-    title.textContent =
-        `${category} Inventory`;
-
-    renderInventoryItems(
-        items,
-        list
-    );
-}
-
-// ============================================================
-// RENDER INVENTORY ITEMS
-// ============================================================
-
-function renderInventoryItems(
-    items,
-    container
-) {
-
-    if (!container) {
-        return;
-    }
-
-    if (!items.length) {
-
-        container.innerHTML = `
-
-            <div class="empty-message">
-                No inventory items found.
-            </div>
-
-        `;
-
-        return;
-    }
-
-    container.innerHTML = "";
-
-    items.forEach(
-        item => {
-
-            const isLow =
-                Number(item.stock) <=
-                Number(item.min_stock);
-
-            const element =
-                document.createElement(
-                    "div"
-                );
-
-            element.className =
-                "inventory-item";
-
-            element.style.border =
-                isLow
-                    ? "1px solid #fecaca"
-                    : "1px solid #e2e8f0";
-
-            element.innerHTML = `
-
-                <div class="inventory-item-header">
-
-                    <div class="inventory-item-name">
-
-                        ${escapeHtml(
-                            item.name
-                        )}
-
-                    </div>
-
-                    <div class="${
-                        isLow
-                            ? "stock-low"
-                            : "stock-normal"
-                    }">
-
-                        Stock:
-                        ${escapeHtml(
-                            item.stock
-                        )}
-
-                    </div>
-
-                </div>
-
-                <div class="inventory-item-details">
-
-                    Category:
-                    ${escapeHtml(
-                        item.category ||
-                        "N/A"
-                    )}
-
-                    <br>
-
-                    Minimum stock:
-                    ${escapeHtml(
-                        item.min_stock
-                    )}
-
-                    <br>
-
-                    Supplier:
-                    ${escapeHtml(
-                        item.supplier ||
-                        "N/A"
-                    )}
-
-                </div>
-
-                ${
-                    isLow
-                        ? `
-
-                        <div style="
-                            margin-top:10px;
-                            padding:9px;
-                            background:#fef2f2;
-                            color:#b91c1c;
-                            border-radius:8px;
-                            font-weight:600;
-                        ">
-
-                            ⚠ LOW STOCK
-
-                            <span style="
-                                font-weight:400;
-                                margin-left:5px;
-                            ">
-
-                                Only
-                                ${escapeHtml(item.stock)}
-                                left
-
-                            </span>
-
-                        </div>
-
-                        `
-                        : ""
-                }
-
-                <div style="
-                    margin-top:12px;
-                    display:flex;
-                    gap:8px;
-                    flex-wrap:wrap;
-                ">
-
-                    <button
-                        onclick="openComponent(${JSON.stringify(item.name)})"
-                        style="
-                            padding:9px 13px;
-                            border:1px solid #2563eb;
-                            background:white;
-                            color:#2563eb;
-                            border-radius:7px;
-                            cursor:pointer;
-                        "
-                    >
-                        View Details
-                    </button>
-
-                    <button
-                        onclick="reorderComponent(${JSON.stringify(item.name)})"
-                        style="
-                            padding:9px 13px;
-                            border:none;
-                            background:${
-                                isLow
-                                    ? "#dc2626"
-                                    : "#2563eb"
-                            };
-                            color:white;
-                            border-radius:7px;
-                            cursor:pointer;
-                            font-weight:600;
-                        "
-                    >
-                        🔄 Reorder
-                    </button>
-
-                    ${
-                        isLow
-                            ? `
-
-                            <button
-                                onclick="notifyLowStock(${JSON.stringify(item.name)})"
-                                style="
-                                    padding:9px 13px;
-                                    border:1px solid #f59e0b;
-                                    background:#fffbeb;
-                                    color:#92400e;
-                                    border-radius:7px;
-                                    cursor:pointer;
-                                    font-weight:600;
-                                "
-                            >
-                                🔔 Notify
-                            </button>
-
-                            `
-                            : ""
-                    }
-
-                </div>
-
-            `;
-
-            container.appendChild(
-                element
-            );
-        }
-    );
-}
-
-// ============================================================
-// LOW STOCK LIST
-// ============================================================
-
-function renderLowStock() {
-
-    const container =
-        document.getElementById(
-            "low-stock-list"
-        );
-
-    if (!container) {
-        return;
-    }
-
-    const items =
-        lowStockItems.length
-            ? lowStockItems
-            : inventory.filter(
-                item =>
-                    Number(item.stock) <=
-                    Number(item.min_stock)
-            );
-
-    if (!items.length) {
-
-        container.innerHTML = `
-
-            <div class="empty-message">
-
-                ✓ No low-stock items.
-                Inventory levels look good.
-
-            </div>
-
-        `;
-
-        return;
-    }
-
-    renderInventoryItems(
-        items,
-        container
-    );
-}
-
-// ============================================================
-// SHOW ALL LOW STOCK
-// ============================================================
-
-function showAllLowStock() {
-
-    const container =
-        document.getElementById(
-            "low-stock-list"
-        );
-
-    if (!container) {
-        return;
-    }
-
-    container.scrollIntoView({
-        behavior: "smooth",
-        block: "start"
-    });
-
-    renderLowStock();
-}
-
-// ============================================================
-// NOTIFY INDIVIDUAL COMPONENT
-// ============================================================
-
-async function notifyLowStock(
-    componentName
-) {
-
-    const item =
-        inventory.find(
-            component =>
-                component.name ===
-                componentName
-        );
-
-    if (!item) {
-
-        alert(
-            "Component not found."
-        );
-
-        return;
-    }
-
-    const permissionGranted =
-        await requestNotificationPermission();
-
-    if (
-        permissionGranted &&
-        "Notification" in window
-    ) {
-
-        new Notification(
-            "Low Stock: " +
-            item.name,
-            {
-                body:
-                    `Current stock: ${item.stock}. Minimum required: ${item.min_stock}.`,
-                icon:
-                    "/static/favicon.ico"
-            }
-        );
-
+function finalizeStreamingBubble(bubble, text, structuredData, dataType) {
+    bubble.classList.remove("streaming");
+    const cursor = bubble.querySelector(".cursor-dot");
+    if (cursor) cursor.remove();
+
+    const textSpan = bubble.querySelector(".bot-text");
+    if (textSpan) {
+        textSpan.innerHTML = parseMarkdown(text);
     } else {
-
-        alert(
-            `LOW STOCK\n\n` +
-            `${item.name}\n\n` +
-            `Current stock: ${item.stock}\n` +
-            `Minimum stock: ${item.min_stock}`
-        );
-    }
-}
-
-// ============================================================
-// NOTIFY ALL LOW STOCK
-// ============================================================
-
-async function notifyAllLowStock() {
-
-    if (!lowStockItems.length) {
-
-        alert(
-            "There are no low-stock items."
-        );
-
-        return;
+        bubble.innerHTML = parseMarkdown(text);
     }
 
-    const permissionGranted =
-        await requestNotificationPermission();
-
-    if (!permissionGranted) {
-
-        alert(
-            `${lowStockItems.length} low-stock item(s) need attention.`
-        );
-
-        return;
-    }
-
-    lowStockItems.forEach(
-        (item, index) => {
-
-            setTimeout(
-                () => {
-
-                    new Notification(
-                        "⚠ Low Stock: " +
-                        item.name,
-                        {
-                            body:
-                                `Stock: ${item.stock} | Minimum: ${item.min_stock}`,
-                            icon:
-                                "/static/favicon.ico"
-                        }
-                    );
-
-                },
-                index * 500
-            );
-        }
-    );
-}
-
-// ============================================================
-// OPEN COMPONENT FROM CHAT
-// ============================================================
-
-async function openComponent(
-    componentName
-) {
-
-    try {
-
-        const component =
-            await apiRequest(
-                `/api/component?name=${encodeURIComponent(
-                    componentName
-                )}`
-            );
-
-        const lowStock =
-            Number(component.stock) <=
-            Number(component.min_stock);
-
-        const reorderQuantity =
-            Math.max(
-                Number(component.min_stock) -
-                Number(component.stock),
-                1
-            );
-
-        addBotMessage(`
-
-            <div style="padding:8px;">
-
-                <div style="
-                    display:flex;
-                    justify-content:space-between;
-                    align-items:center;
-                    gap:10px;
-                ">
-
-                    <h3 style="
-                        margin:0;
-                        color:#1e3a8a;
-                    ">
-
-                        ${escapeHtml(
-                            component.name
-                        )}
-
-                    </h3>
-
-                    <span style="
-                        color:${
-                            lowStock
-                                ? "#dc2626"
-                                : "#16a34a"
-                        };
-                        font-weight:600;
-                    ">
-
-                        ${
-                            lowStock
-                                ? "⚠ Low Stock"
-                                : "✓ In Stock"
-                        }
-
-                    </span>
-
+    // Render structured component card if present
+    if (structuredData) {
+        if (Array.isArray(structuredData) && structuredData.length > 0) {
+            // Render items list or table
+            const card = document.createElement("div");
+            card.className = "structured-card";
+            card.innerHTML = structuredData.slice(0, 8).map(item => `
+                <div class="component-pill ${item.is_low_stock ? 'low-stock' : ''}">
+                    <span class="name">${escapeHtml(item.name)}</span>
+                    <span class="stock">${item.stock} in stock (min: ${item.min_stock})</span>
+                    <span class="supplier">${escapeHtml(item.supplier)}</span>
                 </div>
-
-                <hr style="
-                    margin:16px 0;
-                    border:none;
-                    border-top:1px solid #dbeafe;
-                ">
-
-                <p>
-                    <strong>
-                        Current Stock:
-                    </strong>
-
-                    ${escapeHtml(
-                        component.stock
-                    )}
-                    units
-                </p>
-
-                <p>
-                    <strong>
-                        Minimum Stock:
-                    </strong>
-
-                    ${escapeHtml(
-                        component.min_stock
-                    )}
-                    units
-                </p>
-
-                <p>
-                    <strong>
-                        Supplier:
-                    </strong>
-
-                    ${escapeHtml(
-                        component.supplier ||
-                        "N/A"
-                    )}
-                </p>
-
-                ${
-                    component.last_updated
-                        ? `
-                            <p>
-                                <strong>
-                                    Last Updated:
-                                </strong>
-
-                                ${escapeHtml(
-                                    component.last_updated
-                                )}
-                            </p>
-                        `
-                        : ""
-                }
-
-                <hr style="
-                    margin:16px 0;
-                    border:none;
-                    border-top:1px solid #dbeafe;
-                ">
-
-                ${
-                    lowStock
-                        ? `
-
-                            <div style="
-                                background:#fef2f2;
-                                border:1px solid #fecaca;
-                                padding:12px;
-                                border-radius:10px;
-                                margin-bottom:16px;
-                            ">
-
-                                <strong style="
-                                    color:#b91c1c;
-                                ">
-                                    ⚠ Low Stock Alert
-                                </strong>
-
-                                <br><br>
-
-                                Stock is below the
-                                minimum threshold.
-
-                                <br><br>
-
-                                Recommended reorder:
-
-                                <strong>
-                                    ${reorderQuantity}
-                                    units
-                                </strong>
-
-                            </div>
-
-                        `
-                        : `
-
-                            <div style="
-                                background:#ecfdf5;
-                                border:1px solid #bbf7d0;
-                                padding:12px;
-                                border-radius:10px;
-                                margin-bottom:16px;
-                            ">
-
-                                <strong style="
-                                    color:#166534;
-                                ">
-                                    ✓ Stock Level is Healthy
-                                </strong>
-
-                            </div>
-
-                        `
-                }
-
-                <div style="
-                    display:flex;
-                    gap:10px;
-                    flex-wrap:wrap;
-                ">
-
-                    <button
-                        onclick="reorderComponent(${JSON.stringify(
-                            component.name
-                        )})"
-                        style="
-                            background:${
-                                lowStock
-                                    ? "#dc2626"
-                                    : "#2563eb"
-                            };
-                            color:white;
-                            border:none;
-                            padding:11px 18px;
-                            border-radius:8px;
-                            cursor:pointer;
-                            font-weight:600;
-                        "
-                    >
-                        🔄 Reorder Now
-                    </button>
-
-                    ${
-                        lowStock
-                            ? `
-
-                                <button
-                                    onclick="notifyLowStock(${JSON.stringify(
-                                        component.name
-                                    )})"
-                                    style="
-                                        background:#f59e0b;
-                                        color:white;
-                                        border:none;
-                                        padding:11px 18px;
-                                        border-radius:8px;
-                                        cursor:pointer;
-                                        font-weight:600;
-                                    "
-                                >
-                                    🔔 Notify
-                                </button>
-
-                            `
-                            : ""
-                    }
-
+            `).join("");
+            bubble.appendChild(card);
+        } else if (typeof structuredData === "object" && structuredData.name) {
+            // Single component card
+            const item = structuredData;
+            const card = document.createElement("div");
+            card.className = "component-card-detail";
+            card.innerHTML = `
+                <div class="detail-header">
+                    <h4>${escapeHtml(item.name)}</h4>
+                    <span class="status-badge ${item.is_low_stock ? 'low' : 'ok'}">${item.is_low_stock ? '⚠ Low Stock' : '✓ In Stock'}</span>
                 </div>
-
-            </div>
-
-        `);
-
-    } catch (error) {
-
-        console.error(
-            "Component loading error:",
-            error
-        );
-
-        addBotMessage(
-            "Unable to load component details."
-        );
-    }
-}
-
-// ============================================================
-// CREATE REORDER REQUEST
-// ============================================================
-
-async function reorderComponent(
-    componentName
-) {
-
-    try {
-
-        const component =
-            await apiRequest(
-                `/api/component?name=${encodeURIComponent(
-                    componentName
-                )}`
-            );
-
-        const currentStock =
-            Number(component.stock);
-
-        const minimumStock =
-            Number(component.min_stock);
-
-        const recommendedQuantity =
-            Math.max(
-                minimumStock -
-                currentStock,
-                1
-            );
-
-        // ----------------------------------------------------
-        // ASK USER FOR QUANTITY
-        // ----------------------------------------------------
-
-        const enteredQuantity =
-            prompt(
-                `Reorder ${component.name}\n\n` +
-                `Current stock: ${currentStock}\n` +
-                `Minimum stock: ${minimumStock}\n\n` +
-                `Recommended quantity: ${recommendedQuantity}\n\n` +
-                `Enter quantity to order:`,
-                String(recommendedQuantity)
-            );
-
-        if (
-            enteredQuantity === null
-        ) {
-            return;
-        }
-
-        const quantity =
-            Number(enteredQuantity);
-
-        if (
-            !Number.isInteger(quantity) ||
-            quantity <= 0
-        ) {
-
-            alert(
-                "Please enter a valid quantity greater than 0."
-            );
-
-            return;
-        }
-
-        // ----------------------------------------------------
-        // CONFIRM
-        // ----------------------------------------------------
-
-        const confirmed =
-            confirm(
-                `Create reorder request?\n\n` +
-                `Component: ${component.name}\n` +
-                `Supplier: ${component.supplier || "N/A"}\n` +
-                `Current stock: ${currentStock}\n` +
-                `Minimum stock: ${minimumStock}\n` +
-                `Quantity to order: ${quantity}`
-            );
-
-        if (!confirmed) {
-            return;
-        }
-
-        // ----------------------------------------------------
-        // SEND TO BACKEND
-        // ----------------------------------------------------
-
-        const result =
-            await apiRequest(
-                "/api/reorders",
-                {
-                    method: "POST",
-
-                    headers: {
-                        "Content-Type":
-                            "application/json"
-                    },
-
-                    body:
-                        JSON.stringify({
-                            item_id:
-                                component.id,
-                            quantity:
-                                quantity
-                        })
-                }
-            );
-
-        const reorder =
-            result.reorder ||
-            result;
-
-        if (
-            !reorder ||
-            !reorder.id
-        ) {
-
-            throw new Error(
-                "Server returned an unexpected reorder response."
-            );
-        }
-
-        // ----------------------------------------------------
-        // SHOW SUCCESS
-        // ----------------------------------------------------
-
-        addBotMessage(`
-
-            <div style="
-                padding:16px;
-                background:#ecfdf5;
-                border:1px solid #bbf7d0;
-                border-radius:10px;
-            ">
-
-                <strong style="
-                    color:#166534;
-                    font-size:16px;
-                ">
-
-                    ✓ Reorder Request Created
-
-                </strong>
-
-                <br><br>
-
-                <strong>
-                    Request ID:
-                </strong>
-
-                ${escapeHtml(
-                    reorder.id
-                )}
-
-                <br>
-
-                <strong>
-                    Component:
-                </strong>
-
-                ${escapeHtml(
-                    reorder.item_name ||
-                    component.name
-                )}
-
-                <br>
-
-                <strong>
-                    Supplier:
-                </strong>
-
-                ${escapeHtml(
-                    reorder.supplier ||
-                    component.supplier ||
-                    "N/A"
-                )}
-
-                <br>
-
-                <strong>
-                    Quantity:
-                </strong>
-
-                ${escapeHtml(
-                    reorder.quantity ||
-                    quantity
-                )}
-                units
-
-                <br>
-
-                <strong>
-                    Status:
-                </strong>
-
-                <span style="
-                    color:#ca8a04;
-                    font-weight:700;
-                ">
-
-                    ${escapeHtml(
-                        reorder.status ||
-                        "Pending"
-                    )}
-
-                </span>
-
-                <br><br>
-
-                <small style="
-                    color:#64748b;
-                ">
-
-                    Created:
-                    ${escapeHtml(
-                        reorder.created_at ||
-                        "Now"
-                    )}
-
-                </small>
-
-            </div>
-
-        `);
-
-        // ----------------------------------------------------
-        // REFRESH REORDER REQUESTS
-        // ----------------------------------------------------
-
-        await loadReorderRequests();
-
-        // Refresh low stock state
-        await loadLowStockFromServer();
-
-    } catch (error) {
-
-        console.error(
-            "Reorder error:",
-            error
-        );
-
-        addBotMessage(`
-
-            <div style="
-                padding:12px;
-                background:#fef2f2;
-                border:1px solid #fecaca;
-                border-radius:10px;
-                color:#b91c1c;
-            ">
-
-                <strong>
-                    Unable to create reorder request.
-                </strong>
-
-                <br><br>
-
-                ${escapeHtml(
-                    error.message
-                )}
-
-            </div>
-
-        `);
-    }
-}
-
-// ============================================================
-// LOAD REORDER REQUESTS
-// ============================================================
-
-async function loadReorderRequests() {
-
-    const container =
-        document.getElementById(
-            "reorder-list"
-        );
-
-    if (!container) {
-        return;
-    }
-
-    try {
-
-        const result =
-            await apiRequest(
-                "/api/reorders"
-            );
-
-        // Support either:
-        // [...]
-        // or { reorders: [...] }
-
-        reorderRequests =
-            Array.isArray(result)
-                ? result
-                : (
-                    result.reorders ||
-                    result.data ||
-                    []
-                );
-
-        renderReorderRequests();
-
-    } catch (error) {
-
-        console.error(
-            "Reorder requests loading error:",
-            error
-        );
-
-        container.innerHTML = `
-
-            <div class="empty-message">
-
-                No reorder requests available.
-
-                <br>
-
-                <small style="color:#94a3b8;">
-
-                    ${escapeHtml(
-                        error.message
-                    )}
-
-                </small>
-
-            </div>
-
-        `;
-    }
-}
-
-// ============================================================
-// RENDER REORDER REQUESTS
-// ============================================================
-
-function renderReorderRequests() {
-
-    const container =
-        document.getElementById(
-            "reorder-list"
-        );
-
-    if (!container) {
-        return;
-    }
-
-    if (!reorderRequests.length) {
-
-        container.innerHTML = `
-
-            <div class="empty-message">
-
-                No reorder requests yet.
-
-                <br>
-
-                Click
-                <strong>🔄 Reorder</strong>
-                on an inventory item to create one.
-
-            </div>
-
-        `;
-
-        return;
-    }
-
-    container.innerHTML = "";
-
-    reorderRequests.forEach(
-        request => {
-
-            const status =
-                request.status ||
-                "Pending";
-
-            const statusLower =
-                status.toLowerCase();
-
-            let statusColor =
-                "#ca8a04";
-
-            let statusBackground =
-                "#fefce8";
-
-            if (
-                statusLower ===
-                "approved"
-            ) {
-
-                statusColor =
-                    "#2563eb";
-
-                statusBackground =
-                    "#eff6ff";
-
-            } else if (
-                statusLower ===
-                "completed" ||
-                statusLower ===
-                "received"
-            ) {
-
-                statusColor =
-                    "#15803d";
-
-                statusBackground =
-                    "#f0fdf4";
-
-            } else if (
-                statusLower ===
-                "cancelled" ||
-                statusLower ===
-                "rejected"
-            ) {
-
-                statusColor =
-                    "#dc2626";
-
-                statusBackground =
-                    "#fef2f2";
-            }
-
-            const itemName =
-                request.item_name ||
-                request.name ||
-                request.item?.name ||
-                "Unknown Item";
-
-            const supplier =
-                request.supplier ||
-                request.item?.supplier ||
-                "N/A";
-
-            const element =
-                document.createElement(
-                    "div"
-                );
-
-            element.className =
-                "reorder-item";
-
-            element.innerHTML = `
-
-                <div class="reorder-header">
-
-                    <strong>
-                        ${escapeHtml(
-                            itemName
-                        )}
-                    </strong>
-
-                    <span style="
-                        padding:5px 9px;
-                        border-radius:20px;
-                        background:${statusBackground};
-                        color:${statusColor};
-                        font-size:12px;
-                        font-weight:700;
-                    ">
-
-                        ${escapeHtml(
-                            status
-                        )}
-
-                    </span>
-
+                <div class="detail-grid">
+                    <div><span>Current Stock:</span> <strong>${item.stock} units</strong></div>
+                    <div><span>Min Level:</span> <strong>${item.min_stock} units</strong></div>
+                    <div><span>Category:</span> <strong>${escapeHtml(item.category)}</strong></div>
+                    <div><span>Supplier:</span> <strong>${escapeHtml(item.supplier)}</strong></div>
                 </div>
-
-                <div class="reorder-details">
-
-                    <strong>
-                        Request ID:
-                    </strong>
-
-                    ${escapeHtml(
-                        request.id
-                    )}
-
-                    <br>
-
-                    <strong>
-                        Quantity:
-                    </strong>
-
-                    ${escapeHtml(
-                        request.quantity
-                    )}
-                    units
-
-                    <br>
-
-                    <strong>
-                        Supplier:
-                    </strong>
-
-                    ${escapeHtml(
-                        supplier
-                    )}
-
-                    ${
-                        request.created_at
-                            ? `
-
-                                <br>
-
-                                <strong>
-                                    Created:
-                                </strong>
-
-                                ${escapeHtml(
-                                    request.created_at
-                                )}
-
-                            `
-                            : ""
-                    }
-
+                <div class="detail-actions">
+                    <button class="mini-btn primary" onclick="quickAsk('Reorder ${escapeHtml(item.name)}')">📦 Reorder</button>
+                    <button class="mini-btn" onclick="quickAsk('Who supplies ${escapeHtml(item.name)}?')">🚚 Supplier Info</button>
                 </div>
-
             `;
-
-            container.appendChild(
-                element
-            );
+            bubble.appendChild(card);
         }
-    );
-}
-
-// ============================================================
-// OPEN CATEGORY FROM CHAT
-// ============================================================
-
-async function openCategory(
-    categoryName
-) {
-
-    addUserMessage(
-        categoryName
-    );
-
-    try {
-
-        const components =
-            await apiRequest(
-                `/api/components?category=${encodeURIComponent(
-                    categoryName
-                )}`
-            );
-
-        let html = `
-
-            <strong>
-                ${escapeHtml(
-                    categoryName
-                )} Inventory
-            </strong>
-
-            <br><br>
-
-        `;
-
-        if (
-            !components ||
-            components.length === 0
-        ) {
-
-            html += `
-
-                <div style="
-                    padding:12px;
-                    border:1px solid #dbeafe;
-                    border-radius:10px;
-                ">
-
-                    No inventory items found
-                    in this category.
-
-                </div>
-
-            `;
-
-            addBotMessage(html);
-
-            return;
-        }
-
-        html += `
-            Select a component to view
-            stock details.
-            <br><br>
-        `;
-
-        components.forEach(
-            component => {
-
-                const lowStock =
-                    Number(component.stock) <=
-                    Number(component.min_stock);
-
-                html += `
-
-                    <div
-                        style="
-                            margin-bottom:12px;
-                            padding:12px;
-                            border:1px solid ${
-                                lowStock
-                                    ? "#fecaca"
-                                    : "#dbeafe"
-                            };
-                            border-radius:10px;
-                        "
-                    >
-
-                        <div style="
-                            display:flex;
-                            justify-content:space-between;
-                            align-items:center;
-                            gap:10px;
-                        ">
-
-                            <strong>
-                                ${escapeHtml(
-                                    component.name
-                                )}
-                            </strong>
-
-                            <span style="
-                                color:${
-                                    lowStock
-                                        ? "#dc2626"
-                                        : "#16a34a"
-                                };
-                                font-weight:600;
-                            ">
-
-                                Stock:
-                                ${escapeHtml(
-                                    component.stock
-                                )}
-
-                            </span>
-
-                        </div>
-
-                        <div style="
-                            margin-top:6px;
-                            color:#64748b;
-                        ">
-
-                            ${
-                                lowStock
-                                    ? "⚠ Low Stock"
-                                    : "✓ In Stock"
-                            }
-
-                        </div>
-
-                        <div style="
-                            margin-top:10px;
-                            display:flex;
-                            gap:6px;
-                            flex-wrap:wrap;
-                        ">
-
-                            <button
-                                onclick="openComponent(${JSON.stringify(
-                                    component.name
-                                )})"
-                                style="
-                                    padding:7px 11px;
-                                    border:1px solid #2563eb;
-                                    background:white;
-                                    color:#2563eb;
-                                    border-radius:6px;
-                                    cursor:pointer;
-                                "
-                            >
-                                View
-                            </button>
-
-                            <button
-                                onclick="reorderComponent(${JSON.stringify(
-                                    component.name
-                                )})"
-                                style="
-                                    padding:7px 11px;
-                                    border:none;
-                                    background:${
-                                        lowStock
-                                            ? "#dc2626"
-                                            : "#2563eb"
-                                    };
-                                    color:white;
-                                    border-radius:6px;
-                                    cursor:pointer;
-                                "
-                            >
-                                🔄 Reorder
-                            </button>
-
-                            ${
-                                lowStock
-                                    ? `
-
-                                        <button
-                                            onclick="notifyLowStock(${JSON.stringify(
-                                                component.name
-                                            )})"
-                                            style="
-                                                padding:7px 11px;
-                                                border:none;
-                                                background:#f59e0b;
-                                                color:white;
-                                                border-radius:6px;
-                                                cursor:pointer;
-                                            "
-                                        >
-                                            🔔 Notify
-                                        </button>
-
-                                    `
-                                    : ""
-                            }
-
-                        </div>
-
-                    </div>
-
-                `;
-            }
-        );
-
-        addBotMessage(
-            html
-        );
-
-    } catch (error) {
-
-        console.error(
-            "Category loading error:",
-            error
-        );
-
-        addBotMessage(
-            "Unable to load inventory data."
-        );
     }
 }
 
+function addErrorMessage(message) {
+    const conv = document.getElementById("conversation");
+    if (!conv) return;
+
+    const div = document.createElement("div");
+    div.className = "bot-message error-msg";
+    div.innerHTML = `<strong>Error:</strong> ${escapeHtml(message)}`;
+    conv.appendChild(div);
+}
+
 // ============================================================
-// CHAT / INVENTORY ASSISTANT
+// SEND MESSAGE (WEBSOCKET)
 // ============================================================
 
 async function sendMessage() {
+    const input = document.getElementById("message-input");
+    if (!input) return;
 
-    const input =
-        document.getElementById(
-            "message-input"
-        );
-
-    if (!input) {
-        return;
-    }
-
-    const message =
-        input.value.trim();
-
-    if (!message) {
-        return;
-    }
-
-    addUserMessage(
-        message
-    );
+    const text = input.value.trim();
+    if (!text || isGenerating) return;
 
     input.value = "";
-
-    try {
-
-        const result =
-            await apiRequest(
-                "/api/chat",
-                {
-                    method: "POST",
-
-                    headers: {
-                        "Content-Type":
-                            "application/json"
-                    },
-
-                    body:
-                        JSON.stringify({
-                            message:
-                                message
-                        })
-                }
-            );
-
-        console.log(
-            "Chat response:",
-            result
-        );
-
-        // ----------------------------------------------------
-        // COMPONENT
-        // ----------------------------------------------------
-
-        if (
-            result.type ===
-            "component"
-        ) {
-
-            if (
-                result.data &&
-                result.data.name
-            ) {
-
-                await openComponent(
-                    result.data.name
-                );
-
-            } else {
-
-                addBotMessage(
-                    result.message ||
-                    "Component information was not found."
-                );
-            }
-
-            return;
-        }
-
-        // ----------------------------------------------------
-        // LOW STOCK
-        // ----------------------------------------------------
-
-        if (
-            result.type ===
-            "low_stock"
-        ) {
-
-            let html = `
-
-                <strong>
-                    ⚠ Low Stock Items
-                </strong>
-
-                <br><br>
-
-            `;
-
-            if (
-                !result.data ||
-                result.data.length === 0
-            ) {
-
-                html +=
-                    "No low-stock items found.";
-
-                addBotMessage(
-                    html
-                );
-
-                return;
-            }
-
-            result.data.forEach(
-                component => {
-
-                    html += `
-
-                        <div style="
-                            margin-bottom:12px;
-                            padding:12px;
-                            border:1px solid #fecaca;
-                            border-radius:10px;
-                            background:#fffafa;
-                        ">
-
-                            <div style="
-                                display:flex;
-                                justify-content:space-between;
-                                gap:10px;
-                            ">
-
-                                <strong>
-                                    ${escapeHtml(
-                                        component.name
-                                    )}
-                                </strong>
-
-                                <span style="
-                                    color:#dc2626;
-                                    font-weight:600;
-                                ">
-
-                                    Stock:
-                                    ${escapeHtml(
-                                        component.stock
-                                    )}
-
-                                </span>
-
-                            </div>
-
-                            <div>
-                                Minimum:
-                                ${escapeHtml(
-                                    component.min_stock
-                                )}
-                                units
-                            </div>
-
-                            <div>
-                                Supplier:
-                                ${escapeHtml(
-                                    component.supplier
-                                )}
-                            </div>
-
-                            <br>
-
-                            <button
-                                onclick="reorderComponent(${JSON.stringify(
-                                    component.name
-                                )})"
-                                style="
-                                    background:#dc2626;
-                                    color:white;
-                                    border:none;
-                                    padding:8px 12px;
-                                    border-radius:7px;
-                                    cursor:pointer;
-                                    font-weight:600;
-                                "
-                            >
-                                🔄 Reorder
-                            </button>
-
-                            <button
-                                onclick="notifyLowStock(${JSON.stringify(
-                                    component.name
-                                )})"
-                                style="
-                                    background:#f59e0b;
-                                    color:white;
-                                    border:none;
-                                    padding:8px 12px;
-                                    border-radius:7px;
-                                    cursor:pointer;
-                                    margin-left:5px;
-                                    font-weight:600;
-                                "
-                            >
-                                🔔 Notify
-                            </button>
-
-                        </div>
-
-                    `;
-                }
-            );
-
-            addBotMessage(
-                html
-            );
-
-            return;
-        }
-
-        // ----------------------------------------------------
-        // CATEGORY
-        // ----------------------------------------------------
-
-        if (
-            result.type ===
-            "category"
-        ) {
-
-            let html = `
-
-                <strong>
-                    Category Components
-                </strong>
-
-                <br><br>
-
-            `;
-
-            if (
-                !result.data ||
-                result.data.length === 0
-            ) {
-
-                html +=
-                    "No components found.";
-
-                addBotMessage(
-                    html
-                );
-
-                return;
-            }
-
-            result.data.forEach(
-                component => {
-
-                    const lowStock =
-                        Number(component.stock) <=
-                        Number(component.min_stock);
-
-                    html += `
-
-                        <div style="
-                            margin-bottom:10px;
-                            padding:10px;
-                            border:1px solid #dbeafe;
-                            border-radius:8px;
-                        ">
-
-                            <strong>
-                                ${escapeHtml(
-                                    component.name
-                                )}
-                            </strong>
-
-                            <br>
-
-                            Stock:
-                            ${escapeHtml(
-                                component.stock
-                            )}
-                            units
-
-                            <span style="
-                                margin-left:8px;
-                                color:${
-                                    lowStock
-                                        ? "#dc2626"
-                                        : "#16a34a"
-                                };
-                                font-weight:600;
-                            ">
-
-                                ${
-                                    lowStock
-                                        ? "⚠ Low Stock"
-                                        : "✓ In Stock"
-                                }
-
-                            </span>
-
-                            <br><br>
-
-                            <button
-                                onclick="openComponent(${JSON.stringify(
-                                    component.name
-                                )})"
-                                style="
-                                    padding:7px 11px;
-                                    border:1px solid #2563eb;
-                                    background:white;
-                                    color:#2563eb;
-                                    border-radius:6px;
-                                    cursor:pointer;
-                                "
-                            >
-                                View
-                            </button>
-
-                            <button
-                                onclick="reorderComponent(${JSON.stringify(
-                                    component.name
-                                )})"
-                                style="
-                                    padding:7px 11px;
-                                    border:none;
-                                    background:${
-                                        lowStock
-                                            ? "#dc2626"
-                                            : "#2563eb"
-                                    };
-                                    color:white;
-                                    border-radius:6px;
-                                    cursor:pointer;
-                                    margin-left:5px;
-                                "
-                            >
-                                🔄 Reorder
-                            </button>
-
-                            ${
-                                lowStock
-                                    ? `
-
-                                        <button
-                                            onclick="notifyLowStock(${JSON.stringify(
-                                                component.name
-                                            )})"
-                                            style="
-                                                padding:7px 11px;
-                                                border:none;
-                                                background:#f59e0b;
-                                                color:white;
-                                                border-radius:6px;
-                                                cursor:pointer;
-                                                margin-left:5px;
-                                            "
-                                        >
-                                            🔔 Notify
-                                        </button>
-
-                                    `
-                                    : ""
-                            }
-
-                        </div>
-
-                    `;
-                }
-            );
-
-            addBotMessage(
-                html
-            );
-
-            return;
-        }
-
-        // ----------------------------------------------------
-        // INVENTORY
-        // ----------------------------------------------------
-
-        if (
-            result.type ===
-            "inventory"
-        ) {
-
-            let html = `
-
-                <strong>
-                    Inventory
-                </strong>
-
-                <br><br>
-
-                ${escapeHtml(
-                    result.message || ""
-                )}
-
-                <br><br>
-
-            `;
-
-            if (result.data) {
-
-                result.data.forEach(
-                    component => {
-
-                        const lowStock =
-                            Number(component.stock) <=
-                            Number(component.min_stock);
-
-                        html += `
-
-                            <div style="
-                                padding:10px;
-                                margin-bottom:8px;
-                                border:1px solid ${
-                                    lowStock
-                                        ? "#fecaca"
-                                        : "#dbeafe"
-                                };
-                                border-radius:8px;
-                            ">
-
-                                <strong>
-                                    ${escapeHtml(
-                                        component.name
-                                    )}
-                                </strong>
-
-                                <br>
-
-                                Stock:
-                                ${escapeHtml(
-                                    component.stock
-                                )}
-
-                                <div style="
-                                    margin-top:8px;
-                                ">
-
-                                    <button
-                                        onclick="reorderComponent(${JSON.stringify(
-                                            component.name
-                                        )})"
-                                        style="
-                                            background:${
-                                                lowStock
-                                                    ? "#dc2626"
-                                                    : "#2563eb"
-                                            };
-                                            color:white;
-                                            border:none;
-                                            padding:5px 9px;
-                                            border-radius:5px;
-                                            cursor:pointer;
-                                        "
-                                    >
-                                        🔄 Reorder
-                                    </button>
-
-                                    ${
-                                        lowStock
-                                            ? `
-
-                                                <button
-                                                    onclick="notifyLowStock(${JSON.stringify(
-                                                        component.name
-                                                    )})"
-                                                    style="
-                                                        background:#f59e0b;
-                                                        color:white;
-                                                        border:none;
-                                                        padding:5px 9px;
-                                                        border-radius:5px;
-                                                        cursor:pointer;
-                                                        margin-left:5px;
-                                                    "
-                                                >
-                                                    🔔 Notify
-                                                </button>
-
-                                            `
-                                            : ""
-                                    }
-
-                                </div>
-
-                            </div>
-
-                        `;
-                    }
-                );
-            }
-
-            addBotMessage(
-                html
-            );
-
-            return;
-        }
-
-        // ----------------------------------------------------
-        // DEFAULT
-        // ----------------------------------------------------
-
-        addBotMessage(
-            result.message ||
-            "I couldn't find an answer to that."
-        );
-
-    } catch (error) {
-
-        console.error(
-            "Chat error:",
-            error
-        );
-
-        addBotMessage(`
-
-            <div style="
-                padding:12px;
-                background:#fef2f2;
-                border:1px solid #fecaca;
-                border-radius:10px;
-                color:#b91c1c;
-            ">
-
-                Unable to process your request.
-
-                <br><br>
-
-                ${escapeHtml(
-                    error.message
-                )}
-
-            </div>
-
-        `);
+    addUserMessage(text);
+
+    // Make sure socket is open
+    if (!chatSocket || chatSocket.readyState !== WebSocket.OPEN) {
+        connectWebSocket();
+        await new Promise(r => setTimeout(r, 600));
     }
-}
 
-// ============================================================
-// ENTER KEY
-// ============================================================
-
-function setupMessageInput() {
-
-    const input =
-        document.getElementById(
-            "message-input"
-        );
-
-    if (!input) {
+    if (!chatSocket || chatSocket.readyState !== WebSocket.OPEN) {
+        addErrorMessage("Unable to connect to WebSocket server. Please check connection.");
         return;
     }
 
-    input.addEventListener(
-        "keydown",
-        event => {
+    chatSocket.send(JSON.stringify({
+        type: "message",
+        content: text,
+        conversation_id: activeConversationId
+    }));
+}
 
-            if (
-                event.key ===
-                "Enter"
-            ) {
-
-                event.preventDefault();
-
-                sendMessage();
-            }
-        }
-    );
+function quickAsk(promptText) {
+    const input = document.getElementById("message-input");
+    if (input) {
+        input.value = promptText;
+        sendMessage();
+    }
 }
 
 // ============================================================
-// PAGE INITIALIZATION
+// CONVERSATIONS MANAGEMENT (SIDEBAR)
 // ============================================================
 
-document.addEventListener(
-    "DOMContentLoaded",
-    async () => {
+async function loadConversations() {
+    const listEl = document.getElementById("conversation-list");
+    if (!listEl) return;
 
-        console.log(
-            "Inventory Dashboard initialized."
-        );
+    try {
+        const token = getToken();
+        const res = await fetch("/api/conversations", {
+            headers: token ? { "Authorization": `Bearer ${token}` } : {}
+        });
 
-        setupMessageInput();
+        if (!res.ok) {
+            listEl.innerHTML = `<div class="conv-item-loading">Sign in to view chats</div>`;
+            return;
+        }
 
-        // Do not automatically ask for permission.
-        // Notification permission is requested when
-        // the user actually clicks Notify.
-        await loadInventory();
+        conversations = await res.json();
 
-        // Load reorder requests separately as well.
-        await loadReorderRequests();
+        if (conversations.length === 0) {
+            listEl.innerHTML = `<div class="conv-item-empty">No conversations yet.<br>Click <strong>+ New Chat</strong> to start!</div>`;
+            return;
+        }
+
+        // If no active conversation, pick the first one
+        if (!activeConversationId && conversations.length > 0) {
+            activeConversationId = conversations[0].id;
+            localStorage.setItem("active_conversation_id", activeConversationId);
+        }
+
+        renderConversationList();
+
+        // If active conversation exists, load messages
+        if (activeConversationId) {
+            loadConversationMessages(activeConversationId);
+        }
+
+    } catch (e) {
+        console.error("Error loading conversations:", e);
+        listEl.innerHTML = `<div class="conv-item-loading">Could not load chats.</div>`;
     }
-);
+}
+
+function renderConversationList() {
+    const listEl = document.getElementById("conversation-list");
+    if (!listEl) return;
+
+    listEl.innerHTML = conversations.map(c => `
+        <div class="conv-item ${c.id === activeConversationId ? 'active' : ''}" onclick="selectConversation('${c.id}')">
+            <span class="conv-icon">💬</span>
+            <span class="conv-title">${escapeHtml(c.title || 'New Conversation')}</span>
+        </div>
+    `).join("");
+}
+
+async function selectConversation(id) {
+    if (id === activeConversationId) return;
+    activeConversationId = id;
+    localStorage.setItem("active_conversation_id", id);
+    renderConversationList();
+    await loadConversationMessages(id);
+
+    // Notify WebSocket of conversation switch
+    if (chatSocket && chatSocket.readyState === WebSocket.OPEN) {
+        chatSocket.send(JSON.stringify({
+            type: "init",
+            conversation_id: id
+        }));
+    }
+}
+
+async function startNewConversation() {
+    try {
+        const token = getToken();
+        const res = await fetch("/api/conversations", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...(token ? { "Authorization": `Bearer ${token}` } : {})
+            },
+            body: JSON.stringify({ title: "New Conversation" })
+        });
+
+        if (res.ok) {
+            const newConv = await res.json();
+            conversations.unshift(newConv);
+            activeConversationId = newConv.id;
+            localStorage.setItem("active_conversation_id", newConv.id);
+            renderConversationList();
+
+            // Clear chat window and show welcome
+            const conv = document.getElementById("conversation");
+            if (conv) {
+                conv.innerHTML = `
+                    <div class="bot-message" id="welcome-message">
+                        <strong>Inventory AI Assistant</strong><br><br>
+                        Started a new conversation! How can I help you with the inventory today?
+                    </div>
+                `;
+            }
+
+            const titleEl = document.getElementById("active-chat-title");
+            if (titleEl) titleEl.textContent = newConv.title;
+
+            // Notify WebSocket
+            if (chatSocket && chatSocket.readyState === WebSocket.OPEN) {
+                chatSocket.send(JSON.stringify({
+                    type: "init",
+                    conversation_id: newConv.id
+                }));
+            }
+
+            const input = document.getElementById("message-input");
+            if (input) input.focus();
+        }
+    } catch (e) {
+        console.error("Error creating new conversation:", e);
+    }
+}
+
+async function loadConversationMessages(id) {
+    const conv = document.getElementById("conversation");
+    if (!conv) return;
+
+    try {
+        const token = getToken();
+        const res = await fetch(`/api/conversations/${id}`, {
+            headers: token ? { "Authorization": `Bearer ${token}` } : {}
+        });
+
+        if (!res.ok) return;
+
+        const data = await res.json();
+        const titleEl = document.getElementById("active-chat-title");
+        if (titleEl && data.conversation) {
+            titleEl.textContent = data.conversation.title || "Inventory Assistant";
+        }
+
+        const messages = data.messages || [];
+
+        if (messages.length === 0) {
+            conv.innerHTML = `
+                <div class="bot-message" id="welcome-message">
+                    <strong>Inventory AI Assistant</strong><br><br>
+                    Ask any question about inventory, stock levels, or components.
+                </div>
+            `;
+            return;
+        }
+
+        conv.innerHTML = "";
+        messages.forEach(msg => {
+            if (msg.role === "user") {
+                const userDiv = document.createElement("div");
+                userDiv.className = "user-message";
+                userDiv.textContent = msg.content;
+                conv.appendChild(userDiv);
+            } else if (msg.role === "assistant") {
+                const botDiv = document.createElement("div");
+                botDiv.className = "bot-message";
+                finalizeStreamingBubble(botDiv, msg.content, msg.extra_data, "assistant");
+                conv.appendChild(botDiv);
+            }
+        });
+
+        scrollToBottom();
+
+    } catch (e) {
+        console.error("Error loading conversation messages:", e);
+    }
+}
+
+async function renameCurrentConversation() {
+    if (!activeConversationId) return;
+    const current = conversations.find(c => c.id === activeConversationId);
+    const newTitle = prompt("Enter new conversation title:", current ? current.title : "");
+    if (!newTitle || !newTitle.trim()) return;
+
+    try {
+        const token = getToken();
+        const res = await fetch(`/api/conversations/${activeConversationId}`, {
+            method: "PATCH",
+            headers: {
+                "Content-Type": "application/json",
+                ...(token ? { "Authorization": `Bearer ${token}` } : {})
+            },
+            body: JSON.stringify({ title: newTitle.trim() })
+        });
+
+        if (res.ok) {
+            const updated = await res.json();
+            const idx = conversations.findIndex(c => c.id === activeConversationId);
+            if (idx !== -1) conversations[idx].title = updated.title;
+            renderConversationList();
+            const titleEl = document.getElementById("active-chat-title");
+            if (titleEl) titleEl.textContent = updated.title;
+        }
+    } catch (e) {
+        console.error("Error renaming conversation:", e);
+    }
+}
+
+async function deleteCurrentConversation() {
+    if (!activeConversationId) return;
+    if (!confirm("Are you sure you want to delete this conversation?")) return;
+
+    try {
+        const token = getToken();
+        const res = await fetch(`/api/conversations/${activeConversationId}`, {
+            method: "DELETE",
+            headers: token ? { "Authorization": `Bearer ${token}` } : {}
+        });
+
+        if (res.ok) {
+            conversations = conversations.filter(c => c.id !== activeConversationId);
+            if (conversations.length > 0) {
+                activeConversationId = conversations[0].id;
+                localStorage.setItem("active_conversation_id", activeConversationId);
+                renderConversationList();
+                loadConversationMessages(activeConversationId);
+            } else {
+                activeConversationId = null;
+                localStorage.removeItem("active_conversation_id");
+                startNewConversation();
+            }
+        }
+    } catch (e) {
+        console.error("Error deleting conversation:", e);
+    }
+}
