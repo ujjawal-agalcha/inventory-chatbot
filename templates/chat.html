@@ -3,11 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inventory Management Dashboard & AI Assistant</title>
+    <title>Inventory Intelligence & AI Procurement System</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
 
@@ -20,8 +21,21 @@
                 <div class="brand-logo">IMS</div>
                 <div class="brand-text">
                     <h2>Inventory AI</h2>
-                    <p>Management Dashboard</p>
+                    <p>MongoDB & Real Data</p>
                 </div>
+            </div>
+
+            <!-- Navigation Tabs -->
+            <div class="sidebar-nav">
+                <button class="nav-tab-btn active" id="tab-btn-chat" onclick="switchMainTab('chat')">
+                    <span class="icon">💬</span> AI Assistant
+                </button>
+                <button class="nav-tab-btn" id="tab-btn-analytics" onclick="switchMainTab('analytics')">
+                    <span class="icon">📊</span> Analytics & Master Data
+                </button>
+                <button class="nav-tab-btn" id="tab-btn-upload" onclick="switchMainTab('upload')">
+                    <span class="icon">📁</span> Excel Import Hub
+                </button>
             </div>
 
             <!-- New Chat Button -->
@@ -39,6 +53,11 @@
         </div>
 
         <div class="sidebar-footer">
+            <div class="db-status-badge" id="db-status-badge">
+                <span class="status-dot"></span>
+                <span id="db-status-text">MongoDB: Connected</span>
+            </div>
+
             <div class="user-card">
                 <div class="user-avatar" id="sidebar-avatar">
                     {{ user.name[0] if user.name else "A" }}
@@ -53,14 +72,14 @@
         </div>
     </aside>
 
-    <!-- Main Content -->
+    <!-- Main Content Area -->
     <main class="main-content">
 
         <!-- Header -->
         <header class="top-header">
             <div>
-                <h1>Inventory Intelligence</h1>
-                <p>Real-time hardware stock monitoring and AI assistant</p>
+                <h1 id="page-title">Inventory Intelligence</h1>
+                <p id="page-subtitle">Real-time MongoDB stock monitoring, Excel ingestion & AI assistant</p>
             </div>
 
             <div class="header-actions">
@@ -69,27 +88,27 @@
                     <span class="status-text">Connecting...</span>
                 </div>
                 <button class="notify-btn" onclick="quickAsk('Which items are low stock?')">
-                    Low Stock Alerts ({{ stats.low_stock if stats else '0' }})
+                    Low Stock Alerts (<span id="low-stock-badge">{{ stats.low_stock if stats else '0' }}</span>)
                 </button>
             </div>
         </header>
 
-        <!-- Stats -->
+        <!-- Stats Grid (Always Visible) -->
         <section class="stats-grid">
             <div class="stat-card">
                 <div class="stat-icon blue">📦</div>
                 <div class="stat-info">
                     <span>Total Products</span>
-                    <h3 id="stat-total">{{ stats.total_components if stats else '39' }}</h3>
-                    <small>Across all categories</small>
+                    <h3 id="stat-total">{{ stats.total_components if stats else '0' }}</h3>
+                    <small>Master database items</small>
                 </div>
             </div>
 
             <div class="stat-card">
-                <div class="stat-icon red">⚠</div>
+                <div class="stat-icon red">⚠️</div>
                 <div class="stat-info">
                     <span>Low Stock Items</span>
-                    <h3 id="stat-low">{{ stats.low_stock if stats else '10' }}</h3>
+                    <h3 id="stat-low">{{ stats.low_stock if stats else '0' }}</h3>
                     <small>Require attention</small>
                 </div>
             </div>
@@ -99,95 +118,363 @@
                 <div class="stat-info">
                     <span>Total Units</span>
                     <h3 id="stat-units">{{ stats.total_units if stats else '0' }}</h3>
-                    <small>Live warehouse count</small>
+                    <small>Live inventory count</small>
                 </div>
             </div>
 
             <div class="stat-card">
-                <div class="stat-icon purple">📂</div>
+                <div class="stat-icon purple">💰</div>
                 <div class="stat-info">
-                    <span>Categories</span>
-                    <h3>10</h3>
-                    <small>Hardware divisions</small>
+                    <span>Total Expenses</span>
+                    <h3 id="stat-expenses">₹{{ '{:,.0f}'.format(stats.total_expenses) if stats and stats.total_expenses else '0' }}</h3>
+                    <small>Cumulative spending</small>
                 </div>
             </div>
         </section>
 
-        <!-- Content -->
-        <section class="content-grid">
+        <!-- ====================================================
+             VIEW 1: AI ASSISTANT & CATEGORIES (DEFAULT VIEW)
+             ==================================================== -->
+        <section id="view-chat" class="tab-view active">
+            <div class="content-grid">
 
-            <!-- Categories -->
-            <div class="categories-panel">
-                <div class="panel-header">
-                    <h3>Browse Categories</h3>
-                    <p>Select a category to inspect components and stock</p>
+                <!-- Categories & Quick Lookup -->
+                <div class="categories-panel">
+                    <div class="panel-header">
+                        <h3>Master Categories</h3>
+                        <p>Browse live products grouped by category</p>
+                    </div>
+                    <div id="category-grid" class="category-grid">
+                        <div class="loading-state">Loading categories...</div>
+                    </div>
                 </div>
 
-                <div id="category-grid" class="category-grid"></div>
-            </div>
+                <!-- AI Assistant Panel -->
+                <div class="assistant-panel">
+                    <div class="assistant-header">
+                        <div class="assistant-title">
+                            <div class="assistant-icon">AI</div>
+                            <div>
+                                <h3 id="active-chat-title">Inventory Assistant</h3>
+                                <p id="active-chat-subtitle">Direct MongoDB stock lookup & AI reasoning</p>
+                            </div>
+                        </div>
 
-            <!-- AI Assistant -->
-            <div class="assistant-panel">
-
-                <div class="assistant-header">
-                    <div class="assistant-title">
-                        <div class="assistant-icon">AI</div>
-                        <div>
-                            <h3 id="active-chat-title">Inventory Assistant</h3>
-                            <p id="active-chat-subtitle">Direct SQLite stock lookup & AI intelligence</p>
+                        <div class="chat-header-actions">
+                            <button class="icon-action-btn" title="Rename conversation" onclick="renameCurrentConversation()">✏️</button>
+                            <button class="icon-action-btn delete" title="Delete conversation" onclick="deleteCurrentConversation()">🗑️</button>
                         </div>
                     </div>
 
-                    <div class="chat-header-actions">
-                        <button class="icon-action-btn" title="Rename conversation" onclick="renameCurrentConversation()">✏️</button>
-                        <button class="icon-action-btn delete" title="Delete conversation" onclick="deleteCurrentConversation()">🗑️</button>
+                    <!-- Dynamic Real Data Quick Prompts -->
+                    <div class="quick-prompts" id="quick-prompts-bar">
+                        <button onclick="quickAsk('How many A4 Paper Ream are in stock?')">
+                            📄 A4 Paper Ream stock
+                        </button>
+                        <button onclick="quickAsk('Which items are low stock?')">
+                            ⚠️ Low stock items
+                        </button>
+                        <button onclick="quickAsk('Who supplies Printer Cartridge?')">
+                            🚚 Printer Cartridge vendor
+                        </button>
+                        <button onclick="quickAsk('How much did we spend on Whiteboard Marker?')">
+                            💰 Marker expenses
+                        </button>
+                        <button onclick="quickAsk('What items are currently required?')">
+                            📋 Pending requirements
+                        </button>
+                        <button onclick="quickAsk('Reorder 10 Staplers')">
+                            📦 Reorder Staplers
+                        </button>
+                    </div>
+
+                    <div id="conversation" class="conversation">
+                        <div class="bot-message" id="welcome-message">
+                            <strong>👋 Welcome to the Real Inventory Management Assistant!</strong><br><br>
+                            I query the live <strong>MongoDB Master Inventory</strong> directly. You can ask me:
+                            <ul>
+                                <li><strong>Check Stock:</strong> <em>"How many A4 Paper Reams are in stock?"</em> or <em>"How many ESP32-CAM do we have?"</em></li>
+                                <li><strong>Low Stock & Shortages:</strong> <em>"Which items are low in stock?"</em></li>
+                                <li><strong>Supplier & Vendors:</strong> <em>"Who supplies Printer Cartridge?"</em></li>
+                                <li><strong>Expenses & Purchases:</strong> <em>"How much did we spend on Whiteboard Marker?"</em></li>
+                                <li><strong>Requirements & Orders:</strong> <em>"What components are required?"</em></li>
+                                <li><strong>Automated Reorder:</strong> <em>"Reorder 10 units of Stapler"</em></li>
+                                <li><strong>Multi-turn Memory:</strong> <em>"Who supplies it?"</em> after asking about any item</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="assistant-input">
+                        <input
+                            type="text"
+                            id="message-input"
+                            placeholder="Ask about inventory stock, vendors, expenses, requirements, or products..."
+                            onkeypress="if(event.key==='Enter') sendMessage()"
+                        >
+                        <button onclick="sendMessage()" class="send-btn" id="send-btn">
+                            Send
+                        </button>
                     </div>
                 </div>
 
-                <div class="quick-prompts">
-                    <button onclick="quickAsk('How many esp32 dev kit are there in stock')">
-                        ESP32 DevKit V1 stock
-                    </button>
-                    <button onclick="quickAsk('Which items are low stock?')">
-                        Low stock items
-                    </button>
-                    <button onclick="quickAsk('Who supplies ESP32 DevKit V1?')">
-                        ESP32 supplier
-                    </button>
-                    <button onclick="quickAsk('Show all ESP Modules')">
-                        ESP Modules
-                    </button>
-                    <button onclick="quickAsk('Reorder ESP32 DevKit V1')">
-                        Create reorder
-                    </button>
-                </div>
+            </div>
+        </section>
 
-                <div id="conversation" class="conversation">
-                    <div class="bot-message" id="welcome-message">
-                        <strong>Inventory AI Assistant</strong><br><br>
-                        I have real-time access to the live SQLite inventory database. I can help you:
-                        <ul>
-                            <li><strong>Check Live Stock</strong> (e.g. <em>"How many esp32 dev kit are there in stock"</em>)</li>
-                            <li><strong>Track Low Stock</strong> (e.g. <em>"Which items are low stock?"</em>)</li>
-                            <li><strong>Supplier Inquiries</strong> (e.g. <em>"Who supplies ESP32 DevKit V1?"</em>)</li>
-                            <li><strong>Multi-turn Memory</strong> (e.g. <em>"Who supplies it?"</em> after asking about a product)</li>
-                            <li><strong>Create Reorder Requests</strong> for replenishing low stock items</li>
-                        </ul>
+        <!-- ====================================================
+             VIEW 2: REAL-TIME ANALYTICAL DASHBOARD
+             ==================================================== -->
+        <section id="view-analytics" class="tab-view" style="display: none;">
+            
+            <!-- Charts Section -->
+            <div class="analytics-charts-grid">
+                <div class="chart-card">
+                    <div class="chart-header">
+                        <h3>Monthly Expenses Trend</h3>
+                        <p>Total spending across expense sheets</p>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="chart-monthly-expenses"></canvas>
                     </div>
                 </div>
 
-                <div class="assistant-input">
-                    <input
-                        type="text"
-                        id="message-input"
-                        placeholder="Ask about inventory, stock, suppliers, or products..."
-                        onkeypress="if(event.key==='Enter') sendMessage()"
-                    >
-                    <button onclick="sendMessage()" class="send-btn" id="send-btn">
-                        Send
-                    </button>
+                <div class="chart-card">
+                    <div class="chart-header">
+                        <h3>Inventory by Category</h3>
+                        <p>Total stock count per division</p>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="chart-category-breakdown"></canvas>
+                    </div>
                 </div>
 
+                <div class="chart-card">
+                    <div class="chart-header">
+                        <h3>Top Expense Products</h3>
+                        <p>Highest cumulative procurement spending</p>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="chart-top-expenses"></canvas>
+                    </div>
+                </div>
+
+                <div class="chart-card">
+                    <div class="chart-header">
+                        <h3>Supplier Distribution</h3>
+                        <p>Spending & item share across vendors</p>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="chart-supplier-distribution"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Master Inventory Table -->
+            <div class="data-table-card">
+                <div class="table-header-flex">
+                    <div>
+                        <h3>Master Inventory Database (MongoDB)</h3>
+                        <p>Unified dataset automatically merged and normalized from uploaded Excel workbooks</p>
+                    </div>
+                    <div class="table-actions">
+                        <input type="text" id="inventory-table-search" placeholder="Search product, category, vendor..." oninput="filterMasterTable()">
+                        <select id="inventory-category-filter" onchange="filterMasterTable()">
+                            <option value="">All Categories</option>
+                        </select>
+                        <button class="mini-btn primary" onclick="refreshDashboardData()">🔄 Refresh</button>
+                    </div>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="styled-table" id="master-inventory-table">
+                        <thead>
+                            <tr>
+                                <th>Product / Component</th>
+                                <th>Category</th>
+                                <th>Current Stock</th>
+                                <th>Min Level</th>
+                                <th>Unit Price</th>
+                                <th>Total Spent</th>
+                                <th>Supplier / Vendor</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="master-table-body">
+                            <tr><td colspan="9" class="text-center">Loading live inventory...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Recent Transactions Split Grid -->
+            <div class="transactions-grid">
+                <div class="data-table-card">
+                    <div class="table-header-flex">
+                        <div>
+                            <h4>Recent Procurement Requirements (File 1)</h4>
+                            <p>Order statuses and approvals</p>
+                        </div>
+                    </div>
+                    <div class="table-responsive small">
+                        <table class="styled-table compact">
+                            <thead>
+                                <tr>
+                                    <th>Item</th>
+                                    <th>Qty</th>
+                                    <th>Price</th>
+                                    <th>Status</th>
+                                    <th>Vendor</th>
+                                    <th>Approved By</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recent-procurements-body">
+                                <tr><td colspan="6" class="text-center">Loading procurements...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="data-table-card">
+                    <div class="table-header-flex">
+                        <div>
+                            <h4>Recent Monthly Expenses (File 2)</h4>
+                            <p>Recorded payments & receipts</p>
+                        </div>
+                    </div>
+                    <div class="table-responsive small">
+                        <table class="styled-table compact">
+                            <thead>
+                                <tr>
+                                    <th>Item</th>
+                                    <th>Qty</th>
+                                    <th>Amount</th>
+                                    <th>Month</th>
+                                    <th>Status</th>
+                                    <th>Remark</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recent-expenses-body">
+                                <tr><td colspan="6" class="text-center">Loading expenses...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- ====================================================
+             VIEW 3: EXCEL IMPORT & UPLOAD HUB
+             ==================================================== -->
+        <section id="view-upload" class="tab-view" style="display: none;">
+            
+            <div class="upload-hub-grid">
+                
+                <!-- Upload Card 1: Procurement / Requirements -->
+                <div class="upload-card">
+                    <div class="upload-card-header">
+                        <div class="upload-badge blue">FILE 1</div>
+                        <h3>Procurement & Requirements</h3>
+                        <p>Upload the procurement workbook (e.g. <code>Sample_Procurement_Workbook.xlsx</code>)</p>
+                    </div>
+
+                    <div class="drop-zone" id="drop-zone-procurement" onclick="document.getElementById('file-input-procurement').click()">
+                        <div class="drop-icon">📥</div>
+                        <h4>Click or Drag & Drop Excel File</h4>
+                        <p>Supports .xlsx and .xls workbooks</p>
+                        <span class="file-name-display" id="file-name-procurement">No file selected</span>
+                        <input type="file" id="file-input-procurement" accept=".xlsx, .xls" style="display: none;" onchange="handleFileSelected('procurement')">
+                    </div>
+
+                    <button class="upload-btn primary" id="btn-upload-procurement" onclick="uploadExcel('procurement')" disabled>
+                        Upload & Ingest Procurement Data
+                    </button>
+
+                    <div class="upload-feedback" id="feedback-procurement" style="display: none;"></div>
+                </div>
+
+                <!-- Upload Card 2: Master Expenses -->
+                <div class="upload-card">
+                    <div class="upload-card-header">
+                        <div class="upload-badge purple">FILE 2</div>
+                        <h3>Monthly Expenses Master</h3>
+                        <p>Upload the monthly expense workbook (e.g. <code>Sample_Master_Procurement_Workbook.xlsx</code>)</p>
+                    </div>
+
+                    <div class="drop-zone" id="drop-zone-expenses" onclick="document.getElementById('file-input-expenses').click()">
+                        <div class="drop-icon">📊</div>
+                        <h4>Click or Drag & Drop Excel File</h4>
+                        <p>Processes June, July, Aug and all expense sheets</p>
+                        <span class="file-name-display" id="file-name-expenses">No file selected</span>
+                        <input type="file" id="file-input-expenses" accept=".xlsx, .xls" style="display: none;" onchange="handleFileSelected('expenses')">
+                    </div>
+
+                    <button class="upload-btn primary" id="btn-upload-expenses" onclick="uploadExcel('expenses')" disabled>
+                        Upload & Ingest Expense Records
+                    </button>
+
+                    <div class="upload-feedback" id="feedback-expenses" style="display: none;"></div>
+                </div>
+
+            </div>
+
+            <!-- Import Results Summary Card -->
+            <div class="import-stats-summary" id="import-stats-summary" style="display: none;">
+                <h3>Latest Ingestion Summary</h3>
+                <div class="import-metrics-grid">
+                    <div class="metric-item">
+                        <span class="lbl">Total Rows Detected</span>
+                        <strong class="val" id="metric-total-rows">0</strong>
+                    </div>
+                    <div class="metric-item">
+                        <span class="lbl">Valid Records Ingested</span>
+                        <strong class="val text-success" id="metric-valid-rows">0</strong>
+                    </div>
+                    <div class="metric-item">
+                        <span class="lbl">New Master Products</span>
+                        <strong class="val text-blue" id="metric-new-prods">0</strong>
+                    </div>
+                    <div class="metric-item">
+                        <span class="lbl">Updated Master Products</span>
+                        <strong class="val text-purple" id="metric-updated-prods">0</strong>
+                    </div>
+                    <div class="metric-item">
+                        <span class="lbl">Duplicate Rows Prevented</span>
+                        <strong class="val text-warning" id="metric-dup-rows">0</strong>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Import History Table -->
+            <div class="data-table-card" style="margin-top: 24px;">
+                <div class="table-header-flex">
+                    <div>
+                        <h3>File Import History</h3>
+                        <p>Complete audit log of all imported Excel workbooks and deduplication records</p>
+                    </div>
+                    <button class="mini-btn" onclick="loadImportHistory()">🔄 Refresh History</button>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="styled-table">
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Filename</th>
+                                <th>File Type</th>
+                                <th>Total Rows</th>
+                                <th>Valid Rows</th>
+                                <th>New Products</th>
+                                <th>Updated Products</th>
+                                <th>Duplicates Prevented</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="import-history-body">
+                            <tr><td colspan="9" class="text-center">Loading import history...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
         </section>

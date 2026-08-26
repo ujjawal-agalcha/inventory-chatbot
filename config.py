@@ -23,3 +23,7 @@ JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))
 
 SESSION_SECRET = os.getenv("SESSION_SECRET", "inventory-chatbot-session-secret-key-32bytes-2026")
 
+# MongoDB
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "inventory_chatbot")
+

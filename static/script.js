@@ -1,24 +1,11 @@
 // ============================================================
-// INVENTORY MANAGEMENT & AI ASSISTANT JAVASCRIPT
+// INVENTORY INTELLIGENCE & AI ASSISTANT - PRODUCTION JAVASCRIPT
 // ============================================================
-
-// Categories configuration
-const categories = [
-    { name: "ESP Modules", icon: "📡", description: "ESP32, ESP8266 & wireless boards" },
-    { name: "Arduino Boards", icon: "🔌", description: "Uno R3, Nano, Mega 2560 & Leonardo" },
-    { name: "Motor Drivers", icon: "⚙️", description: "L298N, BTS7960 & TB6612FNG" },
-    { name: "Motors", icon: "🔧", description: "DC gear motors, servos & steppers" },
-    { name: "Sensors", icon: "📊", description: "Ultrasonic, DHT11, PIR & gyroscopes" },
-    { name: "Batteries", icon: "🔋", description: "18650 Li-ion, LiPo & 9V rechargeable" },
-    { name: "Displays", icon: "🖥️", description: "16x2 LCD, 0.96 OLED & TFT displays" },
-    { name: "Relays", icon: "🔀", description: "1-channel & 4-channel relay modules" },
-    { name: "Communication", icon: "📶", description: "Bluetooth HC-05, GSM & GPS modules" },
-    { name: "Components", icon: "🔩", description: "Resistors, capacitors, LEDs & breadboards" }
-];
 
 // Global State
 let activeConversationId = localStorage.getItem("active_conversation_id") || null;
 let conversations = [];
+let masterInventory = [];
 let chatSocket = null;
 let reconnectTimer = null;
 let pingInterval = null;
@@ -26,17 +13,57 @@ let isGenerating = false;
 let currentStreamingBubble = null;
 let currentStreamingText = "";
 
+// Chart instances
+let chartMonthly = null;
+let chartCategory = null;
+let chartTopExp = null;
+let chartSupplier = null;
+
 // ============================================================
 // INITIALIZATION
 // ============================================================
 
 document.addEventListener("DOMContentLoaded", async () => {
-    initCategories();
+    setupDropZones();
     await loadUser();
     await loadStats();
+    await loadCategories();
     await loadConversations();
     connectWebSocket();
 });
+
+// ============================================================
+// NAVIGATION TABS
+// ============================================================
+
+function switchMainTab(tabId) {
+    const views = ["chat", "analytics", "upload"];
+    views.forEach(v => {
+        const viewEl = document.getElementById(`view-${v}`);
+        const btnEl = document.getElementById(`tab-btn-${v}`);
+        if (viewEl) viewEl.style.display = (v === tabId) ? "block" : "none";
+        if (btnEl) {
+            if (v === tabId) btnEl.classList.add("active");
+            else btnEl.classList.remove("active");
+        }
+    });
+
+    const pageTitle = document.getElementById("page-title");
+    const pageSubtitle = document.getElementById("page-subtitle");
+
+    if (tabId === "chat") {
+        if (pageTitle) pageTitle.textContent = "Inventory Intelligence";
+        if (pageSubtitle) pageSubtitle.textContent = "Real-time MongoDB stock monitoring, Excel ingestion & AI assistant";
+    } else if (tabId === "analytics") {
+        if (pageTitle) pageTitle.textContent = "Real-Time Analytical Dashboard";
+        if (pageSubtitle) pageSubtitle.textContent = "Interactive spending trends, category breakdown & master inventory table";
+        refreshDashboardData();
+    } else if (tabId === "upload") {
+        if (pageTitle) pageTitle.textContent = "Excel Ingestion & Integration Hub";
+        if (pageSubtitle) pageSubtitle.textContent = "Upload procurement & monthly expense workbooks with duplicate prevention";
+        loadImportHistory();
+    }
+}
 
 // ============================================================
 // AUTH & USER
@@ -80,23 +107,8 @@ function handleLogout(e) {
 }
 
 // ============================================================
-// DASHBOARD STATS & CATEGORIES
+// DASHBOARD STATS & DYNAMIC CATEGORIES
 // ============================================================
-
-function initCategories() {
-    const grid = document.getElementById("category-grid");
-    if (!grid) return;
-
-    grid.innerHTML = categories.map(cat => `
-        <div class="category-card" onclick="quickAsk('Show all ${cat.name}')">
-            <div class="category-icon">${cat.icon}</div>
-            <div class="category-info">
-                <h4>${escapeHtml(cat.name)}</h4>
-                <p>${escapeHtml(cat.description)}</p>
-            </div>
-        </div>
-    `).join("");
-}
 
 async function loadStats() {
     try {
@@ -106,12 +118,461 @@ async function loadStats() {
             const elTotal = document.getElementById("stat-total");
             const elLow = document.getElementById("stat-low");
             const elUnits = document.getElementById("stat-units");
+            const elExp = document.getElementById("stat-expenses");
+            const elBadge = document.getElementById("low-stock-badge");
+
             if (elTotal) elTotal.textContent = stats.total_components;
             if (elLow) elLow.textContent = stats.low_stock;
-            if (elUnits) elUnits.textContent = stats.total_units;
+            if (elUnits) elUnits.textContent = Number(stats.total_units).toLocaleString();
+            if (elExp) elExp.textContent = "₹" + Number(stats.total_expenses).toLocaleString(undefined, { maximumFractionDigits: 0 });
+            if (elBadge) elBadge.textContent = stats.low_stock;
         }
     } catch (e) {
         console.warn("Could not load stats:", e);
+    }
+}
+
+async function loadCategories() {
+    const grid = document.getElementById("category-grid");
+    if (!grid) return;
+
+    try {
+        const res = await fetch("/api/dashboard/analytics");
+        if (res.ok) {
+            const data = await res.json();
+            const categories = data.categories || [];
+            
+            if (categories.length === 0) {
+                grid.innerHTML = `
+                    <div class="conv-item-empty">
+                        No inventory data yet.<br>Upload Excel files in the <strong>Excel Import Hub</strong> to populate.
+                    </div>
+                `;
+                return;
+            }
+
+            const icons = ["📦", "📄", "⚙️", "🖥️", "🔋", "🔌", "📊", "🔀", "🚚", "💡"];
+            grid.innerHTML = categories.map((cat, idx) => `
+                <div class="category-card" onclick="quickAsk('Show all ${escapeHtml(cat.category)}')">
+                    <div class="category-icon">${icons[idx % icons.length]}</div>
+                    <div class="category-info">
+                        <h4>${escapeHtml(cat.category)}</h4>
+                        <p>${cat.count} product(s) · ${cat.units} units · ₹${Number(cat.expense).toLocaleString()}</p>
+                    </div>
+                </div>
+            `).join("");
+        }
+    } catch (e) {
+        console.warn("Could not load dynamic categories:", e);
+    }
+}
+
+// ============================================================
+// REAL-TIME ANALYTICS DASHBOARD & CHARTS
+// ============================================================
+
+async function refreshDashboardData() {
+    try {
+        const res = await fetch("/api/dashboard/analytics");
+        if (!res.ok) return;
+
+        const data = await res.json();
+        renderCharts(data);
+        renderMasterTable();
+        renderRecentTransactions(data);
+    } catch (e) {
+        console.error("Error refreshing dashboard data:", e);
+    }
+}
+
+function renderCharts(data) {
+    // 1. Monthly Expenses
+    const ctxMonthly = document.getElementById("chart-monthly-expenses");
+    if (ctxMonthly) {
+        const months = data.monthly_expenses || [];
+        if (chartMonthly) chartMonthly.destroy();
+        chartMonthly = new Chart(ctxMonthly, {
+            type: "bar",
+            data: {
+                labels: months.map(m => m.month),
+                datasets: [{
+                    label: "Monthly Spend (₹)",
+                    data: months.map(m => m.amount),
+                    backgroundColor: "rgba(79, 70, 229, 0.8)",
+                    borderColor: "rgba(79, 70, 229, 1)",
+                    borderWidth: 1,
+                    borderRadius: 6,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { beginAtZero: true, ticks: { callback: v => "₹" + Number(v).toLocaleString() } }
+                }
+            }
+        });
+    }
+
+    // 2. Category Breakdown
+    const ctxCat = document.getElementById("chart-category-breakdown");
+    if (ctxCat) {
+        const cats = data.categories || [];
+        if (chartCategory) chartCategory.destroy();
+        chartCategory = new Chart(ctxCat, {
+            type: "doughnut",
+            data: {
+                labels: cats.map(c => c.category),
+                datasets: [{
+                    data: cats.map(c => c.units),
+                    backgroundColor: [
+                        "#4f46e5", "#06b6d4", "#10b981", "#f59e0b",
+                        "#ef4444", "#8b5cf6", "#ec4899", "#64748b"
+                    ],
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: "right", labels: { boxWidth: 12, font: { size: 11 } } } }
+            }
+        });
+    }
+
+    // 3. Top Expense Items
+    const ctxTopExp = document.getElementById("chart-top-expenses");
+    if (ctxTopExp) {
+        const topExp = data.top_expenses || [];
+        if (chartTopExp) chartTopExp.destroy();
+        chartTopExp = new Chart(ctxTopExp, {
+            type: "bar",
+            data: {
+                labels: topExp.map(p => p.name),
+                datasets: [{
+                    label: "Total Expense (₹)",
+                    data: topExp.map(p => p.total_expense),
+                    backgroundColor: "rgba(139, 92, 246, 0.8)",
+                    borderRadius: 6,
+                }]
+            },
+            options: {
+                indexAxis: "y",
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { beginAtZero: true, ticks: { callback: v => "₹" + Number(v).toLocaleString() } }
+                }
+            }
+        });
+    }
+
+    // 4. Supplier Distribution
+    const ctxSup = document.getElementById("chart-supplier-distribution");
+    if (ctxSup) {
+        const sups = data.suppliers || [];
+        if (chartSupplier) chartSupplier.destroy();
+        chartSupplier = new Chart(ctxSup, {
+            type: "pie",
+            data: {
+                labels: sups.map(s => s.supplier),
+                datasets: [{
+                    data: sups.map(s => s.expense || s.count),
+                    backgroundColor: [
+                        "#10b981", "#3b82f6", "#f59e0b", "#8b5cf6", "#ec4899", "#14b8a6"
+                    ],
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: "right", labels: { boxWidth: 12, font: { size: 11 } } } }
+            }
+        });
+    }
+}
+
+async function renderMasterTable() {
+    const tbody = document.getElementById("master-table-body");
+    const catSelect = document.getElementById("inventory-category-filter");
+    if (!tbody) return;
+
+    try {
+        const res = await fetch("/api/inventory");
+        if (res.ok) {
+            masterInventory = await res.json();
+
+            // Populate category filter dropdown
+            if (catSelect) {
+                const uniqueCats = Array.from(new Set(masterInventory.map(i => i.category).filter(Boolean)));
+                const currentVal = catSelect.value;
+                catSelect.innerHTML = `<option value="">All Categories</option>` + uniqueCats.map(c =>
+                    `<option value="${escapeHtml(c)}" ${c === currentVal ? 'selected' : ''}>${escapeHtml(c)}</option>`
+                ).join("");
+            }
+
+            filterMasterTable();
+        }
+    } catch (e) {
+        console.error("Error rendering master table:", e);
+    }
+}
+
+function filterMasterTable() {
+    const tbody = document.getElementById("master-table-body");
+    if (!tbody) return;
+
+    const query = (document.getElementById("inventory-table-search")?.value || "").toLowerCase().trim();
+    const selectedCat = document.getElementById("inventory-category-filter")?.value || "";
+
+    const filtered = masterInventory.filter(item => {
+        const matchesQuery = !query || 
+            (item.name && item.name.toLowerCase().includes(query)) ||
+            (item.category && item.category.toLowerCase().includes(query)) ||
+            (item.supplier && item.supplier.toLowerCase().includes(query)) ||
+            (item.details && item.details.toLowerCase().includes(query));
+
+        const matchesCat = !selectedCat || (item.category === selectedCat);
+        return matchesQuery && matchesCat;
+    });
+
+    if (filtered.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="9" class="text-center">No inventory records found.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = filtered.map(item => `
+        <tr>
+            <td>
+                <strong>${escapeHtml(item.name)}</strong>
+                ${item.details ? `<br><small class="text-muted">${escapeHtml(item.details)}</small>` : ''}
+            </td>
+            <td><span class="badge-tag">${escapeHtml(item.category)}</span></td>
+            <td><strong>${item.stock}</strong> units</td>
+            <td>${item.min_stock} units</td>
+            <td>₹${Number(item.unit_price).toFixed(2)}</td>
+            <td>₹${Number(item.total_expense || 0).toLocaleString()}</td>
+            <td>${escapeHtml(item.supplier || 'N/A')}</td>
+            <td>
+                <span class="status-badge ${item.is_low_stock ? 'low' : 'ok'}">
+                    ${item.is_low_stock ? '⚠️ Low Stock' : '✓ In Stock'}
+                </span>
+            </td>
+            <td>
+                <button class="mini-btn primary" onclick="quickReorderPrompt('${escapeHtml(item.name)}')">Reorder</button>
+            </td>
+        </tr>
+    `).join("");
+}
+
+function renderRecentTransactions(data) {
+    const procBody = document.getElementById("recent-procurements-body");
+    if (procBody) {
+        const procs = data.recent_procurements || [];
+        if (procs.length === 0) {
+            procBody.innerHTML = `<tr><td colspan="6" class="text-center">No procurement records found.</td></tr>`;
+        } else {
+            procBody.innerHTML = procs.map(p => `
+                <tr>
+                    <td>${escapeHtml(p.product_name)}</td>
+                    <td>${p.quantity}</td>
+                    <td>₹${Number(p.amount).toFixed(0)}</td>
+                    <td><span class="status-badge ${p.order_status.toLowerCase() === 'fulfilled' ? 'ok' : 'pending'}">${escapeHtml(p.order_status)}</span></td>
+                    <td>${escapeHtml(p.vendor_name)}</td>
+                    <td>${escapeHtml(p.approved_by || 'Admin')}</td>
+                </tr>
+            `).join("");
+        }
+    }
+
+    const expBody = document.getElementById("recent-expenses-body");
+    if (expBody) {
+        const exps = data.recent_expenses || [];
+        if (exps.length === 0) {
+            expBody.innerHTML = `<tr><td colspan="6" class="text-center">No expense records found.</td></tr>`;
+        } else {
+            expBody.innerHTML = exps.map(e => `
+                <tr>
+                    <td>${escapeHtml(e.product_name)}</td>
+                    <td>${e.quantity}</td>
+                    <td>₹${Number(e.amount).toFixed(0)}</td>
+                    <td>${escapeHtml(e.expense_month)}</td>
+                    <td><span class="status-badge ok">${escapeHtml(e.status)}</span></td>
+                    <td><small>${escapeHtml(e.remark || '-')}</small></td>
+                </tr>
+            `).join("");
+        }
+    }
+}
+
+function quickReorderPrompt(itemName) {
+    switchMainTab("chat");
+    quickAsk(`Reorder 10 units of ${itemName}`);
+}
+
+// ============================================================
+// EXCEL IMPORT & UPLOAD HUB
+// ============================================================
+
+let selectedFiles = {
+    procurement: null,
+    expenses: null,
+};
+
+function setupDropZones() {
+    ["procurement", "expenses"].forEach(type => {
+        const zone = document.getElementById(`drop-zone-${type}`);
+        if (!zone) return;
+
+        zone.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            zone.classList.add("drag-over");
+        });
+
+        zone.addEventListener("dragleave", () => {
+            zone.classList.remove("drag-over");
+        });
+
+        zone.addEventListener("drop", (e) => {
+            e.preventDefault();
+            zone.classList.remove("drag-over");
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                const file = e.dataTransfer.files[0];
+                if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls")) {
+                    selectedFiles[type] = file;
+                    updateFileDisplay(type, file.name);
+                } else {
+                    alert("Please select an Excel (.xlsx or .xls) workbook.");
+                }
+            }
+        });
+    });
+}
+
+function handleFileSelected(type) {
+    const input = document.getElementById(`file-input-${type}`);
+    if (input && input.files && input.files[0]) {
+        const file = input.files[0];
+        selectedFiles[type] = file;
+        updateFileDisplay(type, file.name);
+    }
+}
+
+function updateFileDisplay(type, name) {
+    const display = document.getElementById(`file-name-${type}`);
+    const btn = document.getElementById(`btn-upload-${type}`);
+    if (display) display.textContent = `Selected: ${name}`;
+    if (btn) btn.disabled = false;
+}
+
+async function uploadExcel(type) {
+    const file = selectedFiles[type];
+    if (!file) return;
+
+    const btn = document.getElementById(`btn-upload-${type}`);
+    const feedback = document.getElementById(`feedback-${type}`);
+    const originalText = btn ? btn.textContent : "Upload";
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Processing & Ingesting into MongoDB...";
+    }
+
+    if (feedback) {
+        feedback.style.display = "block";
+        feedback.className = "upload-feedback loading";
+        feedback.textContent = "Reading sheets, normalizing data, detecting duplicates, and updating master inventory...";
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+        const endpoint = type === "procurement" ? "/api/upload/procurement" : "/api/upload/expenses";
+        const res = await fetch(endpoint, {
+            method: "POST",
+            body: formData,
+        });
+
+        const result = await res.json();
+
+        if (res.ok && result.success) {
+            const data = result.data || {};
+            if (feedback) {
+                feedback.className = "upload-feedback success";
+                feedback.innerHTML = `
+                    <strong>✅ Import Successful!</strong><br>
+                    • Total Rows: ${data.total_rows || 0}<br>
+                    • Valid Records: ${data.valid_records || 0}<br>
+                    • New Master Products: ${data.new_records || 0}<br>
+                    • Updated Master Products: ${data.updated_records || 0}<br>
+                    • Duplicates Prevented: ${data.duplicate_records || 0}
+                `;
+            }
+
+            // Update metrics card
+            const summaryCard = document.getElementById("import-stats-summary");
+            if (summaryCard) summaryCard.style.display = "block";
+            document.getElementById("metric-total-rows").textContent = data.total_rows || 0;
+            document.getElementById("metric-valid-rows").textContent = data.valid_records || 0;
+            document.getElementById("metric-new-prods").textContent = data.new_records || 0;
+            document.getElementById("metric-updated-prods").textContent = data.updated_records || 0;
+            document.getElementById("metric-dup-rows").textContent = data.duplicate_records || 0;
+
+            // Refresh live stats & categories
+            await loadStats();
+            await loadCategories();
+            await loadImportHistory();
+        } else {
+            if (feedback) {
+                feedback.className = "upload-feedback error";
+                feedback.textContent = `❌ Import Failed: ${result.detail || result.message || "Unknown error occurred."}`;
+            }
+        }
+    } catch (e) {
+        console.error("Upload error:", e);
+        if (feedback) {
+            feedback.className = "upload-feedback error";
+            feedback.textContent = `❌ Network/Server Error: ${e.message}`;
+        }
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalText;
+        }
+    }
+}
+
+async function loadImportHistory() {
+    const tbody = document.getElementById("import-history-body");
+    if (!tbody) return;
+
+    try {
+        const res = await fetch("/api/imports");
+        if (res.ok) {
+            const imports = await res.json();
+            if (imports.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="9" class="text-center">No import history yet. Upload an Excel workbook above!</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = imports.map(imp => `
+                <tr>
+                    <td><small>${new Date(imp.upload_timestamp).toLocaleString()}</small></td>
+                    <td><strong>${escapeHtml(imp.filename)}</strong></td>
+                    <td><span class="badge-tag">${escapeHtml(imp.file_type)}</span></td>
+                    <td>${imp.total_rows}</td>
+                    <td>${imp.valid_records}</td>
+                    <td>${imp.new_records}</td>
+                    <td>${imp.updated_records}</td>
+                    <td>${imp.duplicate_records}</td>
+                    <td><span class="status-badge ${imp.status === 'completed' ? 'ok' : 'low'}">${escapeHtml(imp.status)}</span></td>
+                </tr>
+            `).join("");
+        }
+    } catch (e) {
+        console.warn("Could not load import history:", e);
     }
 }
 
@@ -145,14 +606,13 @@ function connectWebSocket() {
         chatSocket = new WebSocket(wsUrl);
 
         chatSocket.onopen = () => {
-            console.log("[WS] Connected successfully");
+            console.log("[WS] Connected to real-time AI assistant");
             updateStatus("connected", "Live Connected");
             if (reconnectTimer) {
                 clearTimeout(reconnectTimer);
                 reconnectTimer = null;
             }
 
-            // Start Ping Keepalive
             if (pingInterval) clearInterval(pingInterval);
             pingInterval = setInterval(() => {
                 if (chatSocket && chatSocket.readyState === WebSocket.OPEN) {
@@ -160,7 +620,6 @@ function connectWebSocket() {
                 }
             }, 25000);
 
-            // Inform server of active conversation
             if (activeConversationId) {
                 chatSocket.send(JSON.stringify({
                     type: "init",
@@ -178,7 +637,6 @@ function connectWebSocket() {
             updateStatus("disconnected", "Offline (Reconnecting...)");
             if (pingInterval) clearInterval(pingInterval);
 
-            // Reconnect attempt
             if (!reconnectTimer) {
                 reconnectTimer = setTimeout(() => {
                     reconnectTimer = null;
@@ -256,7 +714,7 @@ function handleWebSocketMessage(raw) {
                 break;
 
             default:
-                console.log("[WS Unknown Event]", data);
+                console.log("[WS Event]", data);
         }
     } catch (e) {
         console.error("Error parsing WebSocket message:", e, raw);
@@ -269,9 +727,7 @@ function handleWebSocketMessage(raw) {
 
 function scrollToBottom() {
     const conv = document.getElementById("conversation");
-    if (conv) {
-        conv.scrollTop = conv.scrollHeight;
-    }
+    if (conv) conv.scrollTop = conv.scrollHeight;
 }
 
 function escapeHtml(value) {
@@ -303,12 +759,6 @@ function parseMarkdown(text) {
 function addUserMessage(message) {
     const conv = document.getElementById("conversation");
     if (!conv) return;
-
-    // Remove initial welcome if first message
-    const welcome = document.getElementById("welcome-message");
-    if (welcome && conv.children.length === 1) {
-        // keep welcome or let it stay
-    }
 
     const div = document.createElement("div");
     div.className = "user-message";
@@ -351,7 +801,6 @@ function finalizeStreamingBubble(bubble, text, structuredData, dataType) {
     // Render structured component card if present
     if (structuredData) {
         if (Array.isArray(structuredData) && structuredData.length > 0) {
-            // Render items list or table
             const card = document.createElement("div");
             card.className = "structured-card";
             card.innerHTML = structuredData.slice(0, 8).map(item => `
@@ -363,24 +812,24 @@ function finalizeStreamingBubble(bubble, text, structuredData, dataType) {
             `).join("");
             bubble.appendChild(card);
         } else if (typeof structuredData === "object" && structuredData.name) {
-            // Single component card
             const item = structuredData;
             const card = document.createElement("div");
             card.className = "component-card-detail";
             card.innerHTML = `
                 <div class="detail-header">
                     <h4>${escapeHtml(item.name)}</h4>
-                    <span class="status-badge ${item.is_low_stock ? 'low' : 'ok'}">${item.is_low_stock ? '⚠ Low Stock' : '✓ In Stock'}</span>
+                    <span class="status-badge ${item.is_low_stock ? 'low' : 'ok'}">${item.is_low_stock ? '⚠️ Low Stock' : '✓ In Stock'}</span>
                 </div>
                 <div class="detail-grid">
                     <div><span>Current Stock:</span> <strong>${item.stock} units</strong></div>
                     <div><span>Min Level:</span> <strong>${item.min_stock} units</strong></div>
-                    <div><span>Category:</span> <strong>${escapeHtml(item.category)}</strong></div>
+                    <div><span>Unit Price:</span> <strong>₹${Number(item.unit_price || 0).toFixed(2)}</strong></div>
                     <div><span>Supplier:</span> <strong>${escapeHtml(item.supplier)}</strong></div>
                 </div>
                 <div class="detail-actions">
-                    <button class="mini-btn primary" onclick="quickAsk('Reorder ${escapeHtml(item.name)}')">📦 Reorder</button>
-                    <button class="mini-btn" onclick="quickAsk('Who supplies ${escapeHtml(item.name)}?')">🚚 Supplier Info</button>
+                    <button class="mini-btn primary" onclick="quickAsk('Reorder 10 units of ${escapeHtml(item.name)}')">📦 Reorder</button>
+                    <button class="mini-btn" onclick="quickAsk('Who supplies ${escapeHtml(item.name)}?')">🚚 Vendor Info</button>
+                    <button class="mini-btn" onclick="quickAsk('How much did we spend on ${escapeHtml(item.name)}?')">💰 Spending</button>
                 </div>
             `;
             bubble.appendChild(card);
@@ -412,7 +861,6 @@ async function sendMessage() {
     input.value = "";
     addUserMessage(text);
 
-    // Make sure socket is open
     if (!chatSocket || chatSocket.readyState !== WebSocket.OPEN) {
         connectWebSocket();
         await new Promise(r => setTimeout(r, 600));
@@ -431,6 +879,7 @@ async function sendMessage() {
 }
 
 function quickAsk(promptText) {
+    switchMainTab("chat");
     const input = document.getElementById("message-input");
     if (input) {
         input.value = promptText;
@@ -464,7 +913,6 @@ async function loadConversations() {
             return;
         }
 
-        // If no active conversation, pick the first one
         if (!activeConversationId && conversations.length > 0) {
             activeConversationId = conversations[0].id;
             localStorage.setItem("active_conversation_id", activeConversationId);
@@ -472,7 +920,6 @@ async function loadConversations() {
 
         renderConversationList();
 
-        // If active conversation exists, load messages
         if (activeConversationId) {
             loadConversationMessages(activeConversationId);
         }
@@ -502,7 +949,6 @@ async function selectConversation(id) {
     renderConversationList();
     await loadConversationMessages(id);
 
-    // Notify WebSocket of conversation switch
     if (chatSocket && chatSocket.readyState === WebSocket.OPEN) {
         chatSocket.send(JSON.stringify({
             type: "init",
@@ -530,13 +976,12 @@ async function startNewConversation() {
             localStorage.setItem("active_conversation_id", newConv.id);
             renderConversationList();
 
-            // Clear chat window and show welcome
             const conv = document.getElementById("conversation");
             if (conv) {
                 conv.innerHTML = `
                     <div class="bot-message" id="welcome-message">
                         <strong>Inventory AI Assistant</strong><br><br>
-                        Started a new conversation! How can I help you with the inventory today?
+                        Started a new conversation! How can I help you with inventory, stock, or procurement today?
                     </div>
                 `;
             }
@@ -544,7 +989,6 @@ async function startNewConversation() {
             const titleEl = document.getElementById("active-chat-title");
             if (titleEl) titleEl.textContent = newConv.title;
 
-            // Notify WebSocket
             if (chatSocket && chatSocket.readyState === WebSocket.OPEN) {
                 chatSocket.send(JSON.stringify({
                     type: "init",
@@ -584,7 +1028,7 @@ async function loadConversationMessages(id) {
             conv.innerHTML = `
                 <div class="bot-message" id="welcome-message">
                     <strong>Inventory AI Assistant</strong><br><br>
-                    Ask any question about inventory, stock levels, or components.
+                    Ask any question about inventory, stock levels, suppliers, or procurement.
                 </div>
             `;
             return;
