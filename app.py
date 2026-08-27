@@ -19,7 +19,8 @@ from fastapi import (
     status,
 )
 # pyrefly: ignore [missing-import]
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponsefrom fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.templating import Jinja2Templates
 # pyrefly: ignore [missing-import]
 from fastapi.staticfiles import StaticFiles
 # pyrefly: ignore [missing-import]
@@ -66,6 +67,10 @@ from services.mongo_inventory_service import (
     create_reorder_request,
     get_all_reorders,
     get_import_history_list,
+    ensure_permanent_electronic_inventory,
+    preview_import_deletion,
+    delete_import_batch,
+    clean_legacy_sample_data,
 )
 
 from services.excel_import_service import (
@@ -101,11 +106,13 @@ logging.basicConfig(
 logger.info("Using SQLite Auth Database: %s", DATABASE_PATH)
 logger.info("Using MongoDB Inventory: %s (%s)", MONGODB_URI, MONGODB_DATABASE)
 
-# Initialize MongoDB indexes on startup
+# Initialize MongoDB indexes and permanent electronic inventory on startup
 try:
     init_mongo_indexes()
+    ensure_permanent_electronic_inventory()
+    logger.info("Permanent electronic inventory verified in MongoDB.")
 except Exception as e:
-    logger.warning("MongoDB index initialization on startup: %s", e)
+    logger.warning("MongoDB initialization on startup: %s", e)
 
 
 # ============================================================
@@ -631,6 +638,65 @@ async def upload_auto_excel(
     except Exception as e:
         logger.exception("Failed to auto-import file: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to import file: {str(e)}")
+
+
+# ============================================================
+# PROTECTED ADMIN CLEANUP REST APIS
+# ============================================================
+
+@app.get("/api/admin/imports/{import_id}/preview")
+def preview_import_delete(
+    import_id: str,
+    user: Optional[User] = Depends(get_current_user_optional),
+):
+    """
+    Admin endpoint to preview records that will be affected by deleting an import batch.
+    """
+    try:
+        preview = preview_import_deletion(import_id)
+        return preview
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("Error previewing import deletion: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to generate preview: {str(e)}")
+
+
+@app.delete("/api/admin/imports/{import_id}")
+def delete_import(
+    import_id: str,
+    user: Optional[User] = Depends(get_current_user_optional),
+):
+    """
+    Protected Admin endpoint to safely delete an import batch:
+    - Removes batch procurement and expense records
+    - Removes products created exclusively by this import (source_type == 'excel_import')
+    - Preserves legitimate electronic equipment inventory
+    """
+    try:
+        result = delete_import_batch(import_id)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("Error deleting import batch: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to delete import batch: {str(e)}")
+
+
+@app.post("/api/admin/cleanup-sample-data")
+def cleanup_sample_data(
+    user: Optional[User] = Depends(get_current_user_optional),
+):
+    """
+    Protected Admin endpoint to safely clean up any legacy sample Excel imports.
+    Guarantees permanent electronic equipment data is preserved.
+    """
+    try:
+        result = clean_legacy_sample_data()
+        return result
+    except Exception as e:
+        logger.exception("Error cleaning sample data: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to clean sample data: {str(e)}")
 
 
 @app.get("/api/health")

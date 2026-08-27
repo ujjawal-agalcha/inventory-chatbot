@@ -168,23 +168,23 @@
 
                     <!-- Dynamic Real Data Quick Prompts -->
                     <div class="quick-prompts" id="quick-prompts-bar">
-                        <button onclick="quickAsk('How many A4 Paper Ream are in stock?')">
-                            📄 A4 Paper Ream stock
+                        <button onclick="quickAsk('How many ESP32-CAM are in stock?')">
+                            📡 ESP32-CAM stock
                         </button>
                         <button onclick="quickAsk('Which items are low stock?')">
                             ⚠️ Low stock items
                         </button>
-                        <button onclick="quickAsk('Who supplies Printer Cartridge?')">
-                            🚚 Printer Cartridge vendor
+                        <button onclick="quickAsk('Who supplies Arduino Uno R3?')">
+                            🚚 Arduino Uno vendor
                         </button>
-                        <button onclick="quickAsk('How much did we spend on Whiteboard Marker?')">
-                            💰 Marker expenses
+                        <button onclick="quickAsk('Tell me about HC-SR04 Ultrasonic Sensor')">
+                            🔍 HC-SR04 Sensor details
                         </button>
                         <button onclick="quickAsk('What items are currently required?')">
                             📋 Pending requirements
                         </button>
-                        <button onclick="quickAsk('Reorder 10 Staplers')">
-                            📦 Reorder Staplers
+                        <button onclick="quickAsk('Reorder 10 SG90 Servo Motors')">
+                            📦 Reorder SG90 Servos
                         </button>
                     </div>
 
@@ -193,13 +193,13 @@
                             <strong>👋 Welcome to the Real Inventory Management Assistant!</strong><br><br>
                             I query the live <strong>MongoDB Master Inventory</strong> directly. You can ask me:
                             <ul>
-                                <li><strong>Check Stock:</strong> <em>"How many A4 Paper Reams are in stock?"</em> or <em>"How many ESP32-CAM do we have?"</em></li>
+                                <li><strong>Check Stock:</strong> <em>"How many ESP32-CAM do we have?"</em> or <em>"What is the stock of Arduino Uno R3?"</em></li>
                                 <li><strong>Low Stock & Shortages:</strong> <em>"Which items are low in stock?"</em></li>
-                                <li><strong>Supplier & Vendors:</strong> <em>"Who supplies Printer Cartridge?"</em></li>
-                                <li><strong>Expenses & Purchases:</strong> <em>"How much did we spend on Whiteboard Marker?"</em></li>
+                                <li><strong>Supplier & Vendors:</strong> <em>"Who supplies SG90 Servo Motor?"</em> or <em>"Who supplies HC-05 Bluetooth?"</em></li>
+                                <li><strong>Expenses & Purchases:</strong> <em>"How much did we spend on NEMA 17 Stepper Motor?"</em></li>
                                 <li><strong>Requirements & Orders:</strong> <em>"What components are required?"</em></li>
-                                <li><strong>Automated Reorder:</strong> <em>"Reorder 10 units of Stapler"</em></li>
-                                <li><strong>Multi-turn Memory:</strong> <em>"Who supplies it?"</em> after asking about any item</li>
+                                <li><strong>Automated Reorder:</strong> <em>"Reorder 10 units of 18650 Li-ion Battery"</em></li>
+                                <li><strong>Multi-turn Memory:</strong> <em>"Who supplies it?"</em> or <em>"What is its price?"</em> after asking about any item</li>
                             </ul>
                         </div>
                     </div>
@@ -375,7 +375,7 @@
                     <div class="upload-card-header">
                         <div class="upload-badge blue">FILE 1</div>
                         <h3>Procurement & Requirements</h3>
-                        <p>Upload the procurement workbook (e.g. <code>Sample_Procurement_Workbook.xlsx</code>)</p>
+                        <p>Upload procurement workbooks with order statuses, vendors, and quantities</p>
                     </div>
 
                     <div class="drop-zone" id="drop-zone-procurement" onclick="document.getElementById('file-input-procurement').click()">
@@ -398,13 +398,13 @@
                     <div class="upload-card-header">
                         <div class="upload-badge purple">FILE 2</div>
                         <h3>Monthly Expenses Master</h3>
-                        <p>Upload the monthly expense workbook (e.g. <code>Sample_Master_Procurement_Workbook.xlsx</code>)</p>
+                        <p>Upload monthly expense workbooks with recorded payment receipts</p>
                     </div>
 
                     <div class="drop-zone" id="drop-zone-expenses" onclick="document.getElementById('file-input-expenses').click()">
                         <div class="drop-icon">📊</div>
                         <h4>Click or Drag & Drop Excel File</h4>
-                        <p>Processes June, July, Aug and all expense sheets</p>
+                        <p>Processes monthly tabs and all expense sheets</p>
                         <span class="file-name-display" id="file-name-expenses">No file selected</span>
                         <input type="file" id="file-input-expenses" accept=".xlsx, .xls" style="display: none;" onchange="handleFileSelected('expenses')">
                     </div>
@@ -450,9 +450,12 @@
                 <div class="table-header-flex">
                     <div>
                         <h3>File Import History</h3>
-                        <p>Complete audit log of all imported Excel workbooks and deduplication records</p>
+                        <p>Audit log of all imported Excel workbooks, batch IDs, and deduplication records</p>
                     </div>
-                    <button class="mini-btn" onclick="loadImportHistory()">🔄 Refresh History</button>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="mini-btn" onclick="cleanupSampleDataPrompt()">🧹 Clean Sample Imports</button>
+                        <button class="mini-btn primary" onclick="loadImportHistory()">🔄 Refresh History</button>
+                    </div>
                 </div>
 
                 <div class="table-responsive">
@@ -468,10 +471,11 @@
                                 <th>Updated Products</th>
                                 <th>Duplicates Prevented</th>
                                 <th>Status</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="import-history-body">
-                            <tr><td colspan="9" class="text-center">Loading import history...</td></tr>
+                            <tr><td colspan="10" class="text-center">Loading import history...</td></tr>
                         </tbody>
                     </table>
                 </div>

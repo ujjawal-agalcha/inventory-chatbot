@@ -1,12 +1,12 @@
 import os
 import re
 import io
+import uuid
 import hashlib
 import logging
 from datetime import datetime
 from typing import Dict, Any, List, Tuple, Optional
 import openpyxl
-import pandas as pd
 from bson import ObjectId
 
 from mongo_db import (
@@ -34,17 +34,20 @@ STOP_WORDS = {
 # CATEGORY INFERENCE RULES
 # ============================================================
 CATEGORY_KEYWORDS = {
+    "ESP Modules": ["esp32", "esp8266", "nodemcu", "devkit", "wroom", "esp-32"],
+    "Arduino Boards": ["arduino", "uno", "nano", "mega", "leonardo"],
+    "Motor Drivers": ["driver", "l298n", "bts7960", "tb6612"],
+    "Motors": ["motor", "servo", "sg90", "mg996r", "stepper", "nema", "gear motor"],
+    "Sensors": ["sensor", "ultrasonic", "hc-sr04", "pir", "dht11", "dht22", "mpu6050", "gyroscope", "ir obstacle"],
+    "Batteries": ["battery", "18650", "lipo", "rechargeable", "cell"],
+    "Displays": ["display", "lcd", "oled", "tft", "screen"],
+    "Relays": ["relay", "channel relay"],
+    "Communication": ["bluetooth", "hc-05", "gsm", "sim800l", "gps", "neo-6m", "lora", "zigbee", "rfid"],
+    "Components": ["screw", "nut", "bolt", "resistor", "capacitor", "led", "breadboard", "jumper wire"],
     "Paper & Stationery": ["paper", "ream", "notebook", "notes", "sticky", "pen", "pencil", "marker", "whiteboard", "copier", "stationery"],
     "Office Equipment": ["stapler", "punch", "calculator", "cutter", "shredder", "laminator", "board", "extension", "socket"],
     "IT & Electronics": ["cartridge", "toner", "ink", "printer", "hdmi", "cable", "usb", "adapter", "mouse", "keyboard", "projector", "laptop", "monitor"],
-    "ESP Modules": ["esp32", "esp8266", "nodemcu", "devkit", "wroom", "esp-32"],
-    "Arduino Boards": ["arduino", "uno", "nano", "mega", "leonardo"],
-    "Motors & Drivers": ["motor", "driver", "l298n", "bts7960", "tb6612", "servo", "sg90", "mg996r", "stepper", "nema"],
-    "Sensors & Modules": ["sensor", "ultrasonic", "hc-sr04", "pir", "dht11", "dht22", "mpu6050", "gyroscope", "ir obstacle"],
-    "Power & Batteries": ["battery", "18650", "lipo", "rechargeable", "power supply", "charger"],
     "Health & Hygiene": ["sanitiser", "sanitizer", "dettol", "soap", "mask", "disinfectant", "tissue", "cleaning"],
-    "Communication": ["bluetooth", "hc-05", "gsm", "sim800l", "gps", "neo-6m", "lora", "zigbee", "rfid"],
-    "General Hardware": ["screw", "nut", "bolt", "resistor", "capacitor", "led", "breadboard", "jumper wire", "relay"]
 }
 
 
@@ -117,8 +120,7 @@ def extract_keywords_and_aliases(name: str, details: str = "", remarks: str = ""
         token = token.strip("-").strip()
         if len(token) >= 2 and token not in STOP_WORDS and not token.isdigit():
             keywords.add(token)
-        elif token.isdigit() and len(token) <= 4:
-            # Model numbers like 802, 32, 2560, 18650 are meaningful
+        elif token.isdigit() and len(token) <= 5:
             keywords.add(token)
 
     # Aliases generation
@@ -132,7 +134,6 @@ def extract_keywords_and_aliases(name: str, details: str = "", remarks: str = ""
     if name_clean and normalize_text(name_clean) != norm_name:
         aliases.add(normalize_text(name_clean))
 
-    # Add specifics (e.g., "HP 802 Black" or "JK Copier")
     if details:
         norm_details = normalize_text(details)
         if norm_details:
@@ -149,7 +150,7 @@ def infer_category(name: str, details: str = "") -> str:
         for kw in kws:
             if kw in text:
                 return cat
-    return "Office Supplies & Hardware"
+    return "General Supplies"
 
 
 def compute_row_hash(*fields) -> str:
@@ -210,7 +211,7 @@ def read_excel_sheets(file_bytes: bytes) -> Dict[str, List[List[Any]]]:
 
 
 # ============================================================
-# IMPORT PIPELINE IMPLEMENTATION
+# IMPORT PIPELINE IMPLEMENTATION (IDEMPOTENT + BATCH METADATA)
 # ============================================================
 
 def process_procurement_data(
@@ -219,7 +220,8 @@ def process_procurement_data(
     uploaded_by: str = "admin"
 ) -> Dict[str, Any]:
     """
-    Process File 1: Procurement / Requirements Workbook.
+    Process Procurement / Requirements Workbook.
+    Assigns unique import_batch_id, retains metadata, ensures idempotency.
     """
     init_mongo_indexes()
     products_col = get_products_collection()
@@ -228,9 +230,13 @@ def process_procurement_data(
 
     sheets = read_excel_sheets(file_bytes)
     
+    import_batch_id = f"batch_proc_{uuid.uuid4().hex[:12]}"
+    
     import_record = {
+        "import_batch_id": import_batch_id,
         "filename": filename,
         "file_type": "procurement",
+        "source_type": "excel_import",
         "upload_timestamp": datetime.utcnow(),
         "uploaded_by": uploaded_by,
         "total_rows": 0,
@@ -316,7 +322,6 @@ def process_procurement_data(
                 total_rows += 1
                 raw_name = row[name_idx] if name_idx is not None and name_idx < len(row) else None
                 if not raw_name or str(raw_name).strip() == "":
-                    # Skip empty rows
                     continue
 
                 clean_name = clean_display_name(raw_name)
@@ -340,8 +345,8 @@ def process_procurement_data(
                 issued_by = str(row[issued_by_idx]).strip() if issued_by_idx is not None and issued_by_idx < len(row) and row[issued_by_idx] is not None else ""
                 url = str(row[url_idx]).strip() if url_idx is not None and url_idx < len(row) and row[url_idx] is not None else ""
 
-                # Compute row hash for dedup
-                row_hash = compute_row_hash(norm_name, qty, amount, date_str, vendor, remarks)
+                # Business key deduplication hash (Idempotent across re-uploads)
+                row_hash = compute_row_hash(norm_name, qty, amount, date_str, vendor, order_status, remarks, sheet_name)
 
                 # Check if this exact row was already imported
                 existing_proc = procurement_col.find_one({"row_hash": row_hash})
@@ -358,16 +363,14 @@ def process_procurement_data(
                 existing_prod = products_col.find_one({"normalized_name": norm_name})
                 
                 if existing_prod:
-                    # Update master inventory
                     updated_products_cnt += 1
                     prod_id = existing_prod["_id"]
                     
-                    # Merge keywords & aliases
                     merged_keywords = sorted(list(set(existing_prod.get("keywords", []) + keywords)))
                     merged_aliases = sorted(list(set(existing_prod.get("aliases", []) + aliases)))
                     merged_sources = list(set(existing_prod.get("source_files", []) + [filename]))
+                    merged_batches = list(set(existing_prod.get("import_batch_ids", []) + [import_batch_id]))
 
-                    # If fulfilled, increase current stock; if pending, increase required
                     stock_delta = qty if order_status.lower() == "fulfilled" else 0
                     pending_delta = qty if order_status.lower() in ("pending", "approved") else 0
 
@@ -376,14 +379,15 @@ def process_procurement_data(
                         "keywords": merged_keywords,
                         "aliases": merged_aliases,
                         "source_files": merged_sources,
+                        "import_batch_ids": merged_batches,
                     }
                     if details and not existing_prod.get("details"):
                         update_fields["details"] = details
-                    if vendor and (not existing_prod.get("supplier") or existing_prod.get("supplier") == "Standard Vendor"):
+                    if vendor and (not existing_prod.get("supplier") or existing_prod.get("supplier") in ("Standard Vendor", "Corporate Vendor")):
                         update_fields["supplier"] = vendor
                     if market:
                         update_fields["market"] = market
-                    if unit_price > 0:
+                    if unit_price > 0 and (not existing_prod.get("unit_price") or existing_prod.get("unit_price") == 0.0):
                         update_fields["unit_price"] = unit_price
 
                     products_col.update_one(
@@ -398,7 +402,6 @@ def process_procurement_data(
                         }
                     )
                 else:
-                    # Insert new master product
                     new_products_cnt += 1
                     initial_stock = qty if order_status.lower() == "fulfilled" else max(qty, 5)
                     pending_qty = qty if order_status.lower() in ("pending", "approved") else 0
@@ -420,13 +423,16 @@ def process_procurement_data(
                         "total_qty_purchased": qty if order_status.lower() == "fulfilled" else 0,
                         "total_qty_required": qty,
                         "pending_requirements": pending_qty,
+                        "source_type": "excel_import",
+                        "created_by_import_id": import_batch_id,
+                        "import_batch_ids": [import_batch_id],
                         "source_files": [filename],
                         "created_at": datetime.utcnow(),
                         "updated_at": datetime.utcnow(),
                     }
                     prod_id = products_col.insert_one(new_product_doc).inserted_id
 
-                # Insert Procurement Record
+                # Insert Procurement Record with metadata
                 proc_record = {
                     "product_id": prod_id,
                     "product_name": clean_name,
@@ -444,9 +450,11 @@ def process_procurement_data(
                     "remarks": remarks,
                     "requirement_issued_by": issued_by,
                     "url": url,
+                    "source_type": "excel_import",
                     "source_file": filename,
                     "source_sheet": sheet_name,
                     "import_id": import_id,
+                    "import_batch_id": import_batch_id,
                     "row_hash": row_hash,
                     "created_at": datetime.utcnow(),
                 }
@@ -480,6 +488,7 @@ def process_procurement_data(
             "success": True,
             "filename": filename,
             "file_type": "procurement",
+            "import_batch_id": import_batch_id,
             "total_rows": total_rows,
             "valid_records": valid_records_cnt,
             "new_records": new_products_cnt,
@@ -504,7 +513,8 @@ def process_expenses_data(
     uploaded_by: str = "admin"
 ) -> Dict[str, Any]:
     """
-    Process File 2: Master Procurement / Expenses Workbook (Monthly Expense Tabs).
+    Process Expenses Workbook.
+    Assigns unique import_batch_id, retains metadata, ensures idempotency.
     """
     init_mongo_indexes()
     products_col = get_products_collection()
@@ -513,9 +523,13 @@ def process_expenses_data(
 
     sheets = read_excel_sheets(file_bytes)
 
+    import_batch_id = f"batch_exp_{uuid.uuid4().hex[:12]}"
+
     import_record = {
+        "import_batch_id": import_batch_id,
         "filename": filename,
         "file_type": "expenses",
+        "source_type": "excel_import",
         "upload_timestamp": datetime.utcnow(),
         "uploaded_by": uploaded_by,
         "total_rows": 0,
@@ -600,8 +614,8 @@ def process_expenses_data(
                 status = str(row[status_idx]).strip() if status_idx is not None and status_idx < len(row) and row[status_idx] is not None else "Paid"
                 remark = str(row[remark_idx]).strip() if remark_idx is not None and remark_idx < len(row) and row[remark_idx] is not None else ""
 
-                # Compute row hash
-                row_hash = compute_row_hash(norm_name, qty, amount, date_str, sheet_name, status)
+                # Business key deduplication hash
+                row_hash = compute_row_hash(norm_name, qty, amount, unit_price, date_str, sheet_name, status, remark)
 
                 # Check duplicate
                 existing_exp = expenses_col.find_one({"row_hash": row_hash})
@@ -624,8 +638,8 @@ def process_expenses_data(
                     merged_keywords = sorted(list(set(existing_prod.get("keywords", []) + keywords)))
                     merged_aliases = sorted(list(set(existing_prod.get("aliases", []) + aliases)))
                     merged_sources = list(set(existing_prod.get("source_files", []) + [filename]))
+                    merged_batches = list(set(existing_prod.get("import_batch_ids", []) + [import_batch_id]))
 
-                    # Paid expenses increase current inventory and add to total spent
                     stock_delta = qty if status.lower() == "paid" else 0
 
                     update_fields = {
@@ -633,8 +647,9 @@ def process_expenses_data(
                         "keywords": merged_keywords,
                         "aliases": merged_aliases,
                         "source_files": merged_sources,
+                        "import_batch_ids": merged_batches,
                     }
-                    if unit_price > 0:
+                    if unit_price > 0 and (not existing_prod.get("unit_price") or existing_prod.get("unit_price") == 0.0):
                         update_fields["unit_price"] = unit_price
                     if remark and not existing_prod.get("details"):
                         update_fields["details"] = remark
@@ -671,13 +686,16 @@ def process_expenses_data(
                         "total_qty_purchased": qty,
                         "total_qty_required": 0,
                         "pending_requirements": 0,
+                        "source_type": "excel_import",
+                        "created_by_import_id": import_batch_id,
+                        "import_batch_ids": [import_batch_id],
                         "source_files": [filename],
                         "created_at": datetime.utcnow(),
                         "updated_at": datetime.utcnow(),
                     }
                     prod_id = products_col.insert_one(new_product_doc).inserted_id
 
-                # Insert Expense Record
+                # Insert Expense Record with metadata
                 exp_record = {
                     "product_id": prod_id,
                     "product_name": clean_name,
@@ -690,9 +708,11 @@ def process_expenses_data(
                     "status": status,
                     "remark": remark,
                     "expense_month": sheet_name,
+                    "source_type": "excel_import",
                     "source_file": filename,
                     "source_sheet": sheet_name,
                     "import_id": import_id,
+                    "import_batch_id": import_batch_id,
                     "row_hash": row_hash,
                     "created_at": datetime.utcnow(),
                 }
@@ -726,6 +746,7 @@ def process_expenses_data(
             "success": True,
             "filename": filename,
             "file_type": "expenses",
+            "import_batch_id": import_batch_id,
             "total_rows": total_rows,
             "valid_records": valid_records_cnt,
             "new_records": new_products_cnt,
@@ -751,11 +772,9 @@ def auto_detect_and_import(file_bytes: bytes, filename: str, uploaded_by: str = 
     sheets = read_excel_sheets(file_bytes)
     sheet_names_lower = [s.lower() for s in sheets.keys()]
 
-    # If any sheet contains 'expense' or 'expenses', treat as expenses
     if any("expense" in s for s in sheet_names_lower):
         return process_expenses_data(file_bytes, filename, uploaded_by)
 
-    # If sheet contains 'procurement' or has columns like 'vendor name' / 'approved by'
     for name, rows in sheets.items():
         if not rows or len(rows) < 2:
             continue
@@ -763,7 +782,6 @@ def auto_detect_and_import(file_bytes: bytes, filename: str, uploaded_by: str = 
         if any("approved" in c or "vendor" in c or "market" in c for c in col_map.keys()):
             return process_procurement_data(file_bytes, filename, uploaded_by)
 
-    # Fallback: check columns in first sheet
     first_sheet = next(iter(sheets.values()))
     _, col_map = find_header_row(first_sheet)
     if "amount" in col_map and "unit price" in col_map:

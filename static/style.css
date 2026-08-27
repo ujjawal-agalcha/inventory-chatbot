@@ -1300,4 +1300,46 @@ body {
 .text-success { color: #10b981; }
 .text-blue { color: #3b82f6; }
 .text-purple { color: #8b5cf6; }
-.text-warning { color: #f59e0b; }
+.text-warning { color: #f59e0b; }
+
+/* Mini Action Buttons */
+.mini-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #ffffff;
+    color: var(--text);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.mini-btn:hover {
+    background: var(--surface-2);
+    border-color: #cbd5e1;
+}
+
+.mini-btn.primary {
+    background: var(--primary);
+    color: #ffffff;
+    border-color: var(--primary);
+}
+
+.mini-btn.primary:hover {
+    background: var(--primary-hover);
+}
+
+.mini-btn.delete {
+    background: #fff;
+    color: #ef4444;
+    border-color: #fecaca;
+}
+
+.mini-btn.delete:hover {
+    background: #fef2f2;
+    border-color: #f87171;
+}

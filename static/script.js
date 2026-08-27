@@ -553,7 +553,7 @@ async function loadImportHistory() {
         if (res.ok) {
             const imports = await res.json();
             if (imports.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="9" class="text-center">No import history yet. Upload an Excel workbook above!</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="10" class="text-center">No import history yet. Upload an Excel workbook above!</td></tr>`;
                 return;
             }
 
@@ -568,11 +568,83 @@ async function loadImportHistory() {
                     <td>${imp.updated_records}</td>
                     <td>${imp.duplicate_records}</td>
                     <td><span class="status-badge ${imp.status === 'completed' ? 'ok' : 'low'}">${escapeHtml(imp.status)}</span></td>
+                    <td>
+                        <button class="mini-btn delete" onclick="confirmDeleteImport('${imp.id}', '${escapeHtml(imp.filename)}')">🗑️ Delete</button>
+                    </td>
                 </tr>
             `).join("");
         }
     } catch (e) {
         console.warn("Could not load import history:", e);
+    }
+}
+
+async function confirmDeleteImport(importId, filename) {
+    try {
+        // Fetch deletion preview
+        const token = getToken();
+        const prevRes = await fetch(`/api/admin/imports/${importId}/preview`, {
+            headers: token ? { "Authorization": `Bearer ${token}` } : {}
+        });
+
+        let msg = `Are you sure you want to delete the import batch for '${filename}'?\n\n`;
+        if (prevRes.ok) {
+            const prev = await prevRes.json();
+            msg += `Records to be deleted:\n`;
+            msg += `• Products created exclusively by this import: ${prev.products_to_delete_count}\n`;
+            msg += `• Procurement records: ${prev.procurement_records_to_delete}\n`;
+            msg += `• Expense records: ${prev.expense_records_to_delete}\n`;
+            msg += `• Products preserved & updated: ${prev.products_to_preserve_and_update_count}\n\n`;
+            msg += `Permanent electronic equipment data will remain intact.`;
+        }
+
+        if (!confirm(msg)) return;
+
+        const delRes = await fetch(`/api/admin/imports/${importId}`, {
+            method: "DELETE",
+            headers: token ? { "Authorization": `Bearer ${token}` } : {}
+        });
+
+        const delData = await delRes.json();
+        if (delRes.ok && delData.success) {
+            alert(`✅ Import batch deleted successfully!\n- Products removed: ${delData.deleted_products}\n- Procurement records removed: ${delData.deleted_procurement_records}\n- Expense records removed: ${delData.deleted_expense_records}`);
+            await loadStats();
+            await loadCategories();
+            await refreshDashboardData();
+            await loadImportHistory();
+        } else {
+            alert(`❌ Failed to delete import: ${delData.detail || delData.message || "Unknown error"}`);
+        }
+    } catch (e) {
+        console.error("Error deleting import:", e);
+        alert(`❌ Network or server error: ${e.message}`);
+    }
+}
+
+async function cleanupSampleDataPrompt() {
+    if (!confirm("Are you sure you want to clean up all old sample Excel data?\n\nThis will safely remove sample procurement/expense records and sample product records while preserving all permanent electronic equipment inventory.")) {
+        return;
+    }
+
+    try {
+        const token = getToken();
+        const res = await fetch("/api/admin/cleanup-sample-data", {
+            method: "POST",
+            headers: token ? { "Authorization": `Bearer ${token}` } : {}
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+            alert(`✅ Sample data cleanup completed!\n- Sample products removed: ${data.sample_products_removed}\n- Sample procurements removed: ${data.orphan_procurements_removed}\n- Sample expenses removed: ${data.orphan_expenses_removed}\n- Permanent electronic products active: ${data.permanent_products_count}`);
+            await loadStats();
+            await loadCategories();
+            await refreshDashboardData();
+            await loadImportHistory();
+        } else {
+            alert(`❌ Cleanup failed: ${data.detail || "Unknown error"}`);
+        }
+    } catch (e) {
+        console.error("Error during sample cleanup:", e);
+        alert(`❌ Error: ${e.message}`);
     }
 }
 

@@ -118,13 +118,20 @@ def detect_product(message: str) -> Optional[dict]:
     search_results = search_products(message, limit=3)
     if search_results:
         best = search_results[0]
-        # Verify confidence
+        # Verify confidence with significant tokens
         best_norm = best.get("normalized_name", "")
         best_tokens = set(best_norm.split())
-        msg_tokens = set(norm.split())
-        if best_tokens & msg_tokens:
-            logger.info("Found product by token intersection: '%s'", best["name"])
-            return best
+        stop_words = {
+            "how", "many", "much", "is", "are", "there", "in", "stock", "available",
+            "do", "we", "have", "got", "the", "a", "an", "what", "which", "please",
+            "tell", "me", "about", "show", "give", "current", "units", "left", "who", "supplies"
+        }
+        msg_sig_tokens = set(t for t in norm.split() if t not in stop_words and len(t) >= 2)
+        if msg_sig_tokens and (best_tokens & msg_sig_tokens):
+            match_ratio = len(best_tokens & msg_sig_tokens) / len(msg_sig_tokens)
+            if match_ratio >= 0.5 or (best_tokens & msg_sig_tokens) == best_tokens:
+                logger.info("Found product by token intersection: '%s'", best["name"])
+                return best
 
     return None
 

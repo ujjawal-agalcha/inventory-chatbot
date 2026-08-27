@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
+# pyrefly: ignore [missing-import]
 from bson import ObjectId
 import re
 
@@ -62,6 +63,9 @@ def product_to_dict(doc: dict) -> dict:
         "pending_requirements": doc.get("pending_requirements", 0),
         "keywords": doc.get("keywords", []),
         "aliases": doc.get("aliases", []),
+        "source_type": doc.get("source_type", "permanent_inventory"),
+        "created_by_import_id": str(doc.get("created_by_import_id")) if doc.get("created_by_import_id") else None,
+        "import_batch_ids": [str(b) for b in doc.get("import_batch_ids", [])],
         "source_files": doc.get("source_files", []),
         "last_updated": (
             doc["updated_at"].isoformat()
@@ -92,6 +96,9 @@ def procurement_to_dict(doc: dict) -> dict:
         "remarks": doc.get("remarks", ""),
         "requirement_issued_by": doc.get("requirement_issued_by", ""),
         "url": doc.get("url", ""),
+        "source_type": doc.get("source_type", "excel_import"),
+        "import_id": str(doc.get("import_id", "")),
+        "import_batch_id": str(doc.get("import_batch_id", doc.get("import_id", ""))),
         "source_file": doc.get("source_file", ""),
     }
 
@@ -111,6 +118,9 @@ def expense_to_dict(doc: dict) -> dict:
         "status": doc.get("status", "Paid"),
         "remark": doc.get("remark", ""),
         "expense_month": doc.get("expense_month", ""),
+        "source_type": doc.get("source_type", "excel_import"),
+        "import_id": str(doc.get("import_id", "")),
+        "import_batch_id": str(doc.get("import_batch_id", doc.get("import_id", ""))),
         "source_file": doc.get("source_file", ""),
     }
 
@@ -121,8 +131,10 @@ def import_to_dict(doc: dict) -> dict:
         return {}
     return {
         "id": str(doc.get("_id", "")),
+        "import_batch_id": str(doc.get("import_batch_id", doc.get("_id", ""))),
         "filename": doc.get("filename", ""),
         "file_type": doc.get("file_type", ""),
+        "source_type": doc.get("source_type", "excel_import"),
         "upload_timestamp": (
             doc["upload_timestamp"].isoformat()
             if isinstance(doc.get("upload_timestamp"), datetime)
@@ -141,6 +153,19 @@ def import_to_dict(doc: dict) -> dict:
 
 
 # ============================================================
+# PERMANENT ELECTRONIC INVENTORY GUARANTEE
+# ============================================================
+
+def ensure_permanent_electronic_inventory():
+    """
+    Ensure the 39 legitimate electronic equipment products are present in MongoDB
+    marked with source_type='permanent_inventory'.
+    """
+    from seed_data import seed_mongo_inventory
+    return seed_mongo_inventory()
+
+
+# ============================================================
 # PRODUCT QUERIES
 # ============================================================
 
@@ -150,6 +175,10 @@ def get_all_products(
     status: Optional[str] = None,
 ) -> List[dict]:
     """Retrieve all products from MongoDB with optional filters."""
+    # Ensure baseline electronic inventory is present
+    if get_products_collection().count_documents({}) == 0:
+        ensure_permanent_electronic_inventory()
+
     query = {}
     if category:
         query["category"] = {"$regex": f"^{re.escape(category)}$", "$options": "i"}
@@ -180,6 +209,8 @@ def get_product(name: str) -> Optional[dict]:
         return None
 
     col = get_products_collection()
+    if col.count_documents({}) == 0:
+        ensure_permanent_electronic_inventory()
 
     # 1. Exact normalized name
     doc = col.find_one({"normalized_name": norm})
@@ -221,9 +252,11 @@ def get_product(name: str) -> Optional[dict]:
         if tokens and (tokens.issubset(p_keywords) or (tokens & p_keywords and len(tokens & p_keywords) >= len(tokens))):
             return product_to_dict(p)
 
-    # 4b. Highest scoring token overlap
+    # 4b. High confidence token overlap
     best_prod = None
     best_score = 0
+    min_required_score = max(2, int(len(tokens) * 0.5)) if len(tokens) >= 2 else 1
+
     for p in all_prods:
         p_text = " ".join([
             p.get("name", ""),
@@ -232,15 +265,14 @@ def get_product(name: str) -> Optional[dict]:
             " ".join(p.get("keywords", [])),
         ]).lower()
         score = sum(1 for t in tokens if t in p_text)
-        if score > best_score and score >= 1:
+        if score > best_score and score >= min_required_score:
             best_score = score
             best_prod = p
 
-    if best_prod and best_score >= 1:
+    if best_prod and best_score >= min_required_score:
         return product_to_dict(best_prod)
 
     return None
-
 
 
 def search_products(query_str: str, limit: int = 20) -> List[dict]:
@@ -255,6 +287,8 @@ def search_products(query_str: str, limit: int = 20) -> List[dict]:
         return get_all_products()
 
     col = get_products_collection()
+    if col.count_documents({}) == 0:
+        ensure_permanent_electronic_inventory()
     
     # Check exact product match first
     exact = get_product(query_str)
@@ -309,8 +343,9 @@ def search_products(query_str: str, limit: int = 20) -> List[dict]:
 def get_low_stock_products() -> List[dict]:
     """Retrieve all products where current_stock <= min_stock."""
     col = get_products_collection()
-    # Find items where current_stock <= min_stock
-    # In MongoDB query, we can fetch all or use $expr
+    if col.count_documents({}) == 0:
+        ensure_permanent_electronic_inventory()
+
     try:
         docs = col.find({"$expr": {"$lte": ["$current_stock", "$min_stock"]}}).sort("current_stock", 1)
         return [product_to_dict(d) for d in docs]
@@ -326,6 +361,9 @@ def get_inventory_stats() -> dict:
     col = get_products_collection()
     proc_col = get_procurement_collection()
     exp_col = get_expenses_collection()
+
+    if col.count_documents({}) == 0:
+        ensure_permanent_electronic_inventory()
 
     all_prods = list(col.find({}))
     total_components = len(all_prods)
@@ -354,6 +392,9 @@ def get_dashboard_analytics() -> dict:
     col = get_products_collection()
     proc_col = get_procurement_collection()
     exp_col = get_expenses_collection()
+
+    if col.count_documents({}) == 0:
+        ensure_permanent_electronic_inventory()
 
     all_prods = list(col.find({}))
 
@@ -498,8 +539,11 @@ def create_reorder_request(
         "remarks": remarks or "Automated reorder from Chatbot",
         "requirement_issued_by": "AI Assistant",
         "url": "",
+        "source_type": "manual_reorder",
         "source_file": "Chatbot Reorder",
         "source_sheet": "Live System",
+        "import_id": None,
+        "import_batch_id": None,
         "row_hash": row_hash,
         "created_at": date_now,
     }
@@ -528,3 +572,261 @@ def get_import_history_list(limit: int = 20) -> List[dict]:
     imports_col = get_imports_collection()
     docs = imports_col.find({}).sort("upload_timestamp", -1).limit(limit)
     return [import_to_dict(d) for d in docs]
+
+
+# ============================================================
+# SAFE IMPORT BATCH CLEANUP & SAMPLE DATA REMOVAL
+# ============================================================
+
+def _resolve_import_doc(batch_or_id: str) -> Optional[dict]:
+    """Find import document by ObjectId or string batch id."""
+    imports_col = get_imports_collection()
+    if ObjectId.is_valid(batch_or_id):
+        doc = imports_col.find_one({"_id": ObjectId(batch_or_id)})
+        if doc:
+            return doc
+    doc = imports_col.find_one({"import_batch_id": str(batch_or_id)})
+    if doc:
+        return doc
+    doc = imports_col.find_one({"filename": str(batch_or_id)})
+    return doc
+
+
+def preview_import_deletion(batch_or_id: str) -> Dict[str, Any]:
+    """
+    Preview what records will be deleted or updated before executing deletion.
+    """
+    import_doc = _resolve_import_doc(batch_or_id)
+    if not import_doc:
+        raise ValueError(f"Import record '{batch_or_id}' not found.")
+
+    imp_id = import_doc["_id"]
+    batch_str = str(import_doc.get("import_batch_id", imp_id))
+    filename = import_doc.get("filename", "")
+
+    proc_col = get_procurement_collection()
+    exp_col = get_expenses_collection()
+    prod_col = get_products_collection()
+
+    # Match procurement records
+    proc_query = {
+        "$or": [
+            {"import_id": imp_id},
+            {"import_id": batch_str},
+            {"import_batch_id": batch_str},
+            {"source_file": filename},
+        ]
+    }
+    proc_count = proc_col.count_documents(proc_query)
+
+    # Match expense records
+    exp_query = {
+        "$or": [
+            {"import_id": imp_id},
+            {"import_id": batch_str},
+            {"import_batch_id": batch_str},
+            {"source_file": filename},
+        ]
+    }
+    exp_count = exp_col.count_documents(exp_query)
+
+    # Products created exclusively by this import (will be deleted)
+    exclusive_prods_query = {
+        "source_type": "excel_import",
+        "$or": [
+            {"created_by_import_id": batch_str},
+            {"created_by_import_id": str(imp_id)},
+            {"source_files": [filename]},
+        ]
+    }
+    exclusive_prods = list(prod_col.find(exclusive_prods_query))
+    exclusive_prod_names = [p.get("name") for p in exclusive_prods]
+
+    # Products that are permanent or updated by multiple imports (will be preserved/recalculated)
+    shared_prods_query = {
+        "$or": [
+            {"source_files": filename},
+            {"import_batch_ids": batch_str},
+        ],
+        "_id": {"$nin": [p["_id"] for p in exclusive_prods]}
+    }
+    shared_prods = list(prod_col.find(shared_prods_query))
+    shared_prod_names = [p.get("name") for p in shared_prods]
+
+    return {
+        "import_id": str(imp_id),
+        "import_batch_id": batch_str,
+        "filename": filename,
+        "file_type": import_doc.get("file_type", ""),
+        "upload_timestamp": str(import_doc.get("upload_timestamp", "")),
+        "procurement_records_to_delete": proc_count,
+        "expense_records_to_delete": exp_count,
+        "products_to_delete_count": len(exclusive_prods),
+        "products_to_delete": exclusive_prod_names,
+        "products_to_preserve_and_update_count": len(shared_prods),
+        "products_to_preserve_and_update": shared_prod_names,
+    }
+
+
+def delete_import_batch(batch_or_id: str) -> Dict[str, Any]:
+    """
+    Safely delete an import batch:
+    - Removes associated procurement and expense records
+    - Removes products created exclusively by this import (source_type == 'excel_import')
+    - Preserves permanent electronic inventory and updates shared products
+    - Removes import history record
+    """
+    import_doc = _resolve_import_doc(batch_or_id)
+    if not import_doc:
+        raise ValueError(f"Import record '{batch_or_id}' not found.")
+
+    imp_id = import_doc["_id"]
+    batch_str = str(import_doc.get("import_batch_id", imp_id))
+    filename = import_doc.get("filename", "")
+
+    proc_col = get_procurement_collection()
+    exp_col = get_expenses_collection()
+    prod_col = get_products_collection()
+    imports_col = get_imports_collection()
+
+    # 1. Delete procurement records
+    proc_del_res = proc_col.delete_many({
+        "$or": [
+            {"import_id": imp_id},
+            {"import_id": batch_str},
+            {"import_batch_id": batch_str},
+            {"source_file": filename},
+        ]
+    })
+
+    # 2. Delete expense records
+    exp_del_res = exp_col.delete_many({
+        "$or": [
+            {"import_id": imp_id},
+            {"import_id": batch_str},
+            {"import_batch_id": batch_str},
+            {"source_file": filename},
+        ]
+    })
+
+    # 3. Delete products created exclusively by this import
+    # Never delete permanent inventory!
+    exclusive_prods_query = {
+        "source_type": "excel_import",
+        "$or": [
+            {"created_by_import_id": batch_str},
+            {"created_by_import_id": str(imp_id)},
+            {"source_files": [filename]},
+        ]
+    }
+    prod_del_res = prod_col.delete_many(exclusive_prods_query)
+
+    # 4. Clean up references in remaining products (remove filename and batch id)
+    remaining_prods = prod_col.find({
+        "$or": [
+            {"source_files": filename},
+            {"import_batch_ids": batch_str},
+        ]
+    })
+    for p in remaining_prods:
+        new_sources = [s for s in p.get("source_files", []) if s != filename]
+        new_batches = [b for b in p.get("import_batch_ids", []) if str(b) != batch_str]
+        
+        # Recalculate requirements / expenses from remaining records
+        pid = p["_id"]
+        rem_proc = list(proc_col.find({"product_id": pid}))
+        rem_exp = list(exp_col.find({"product_id": pid}))
+
+        total_req = sum(r.get("quantity", 0) for r in rem_proc)
+        pending_req = sum(r.get("quantity", 0) for r in rem_proc if r.get("order_status", "").lower() in ("pending", "approved"))
+        total_exp = sum(e.get("amount", 0.0) for e in rem_exp)
+
+        prod_col.update_one(
+            {"_id": pid},
+            {
+                "$set": {
+                    "source_files": new_sources,
+                    "import_batch_ids": new_batches,
+                    "total_qty_required": total_req,
+                    "pending_requirements": pending_req,
+                    "total_expense": total_exp,
+                    "updated_at": datetime.utcnow(),
+                }
+            }
+        )
+
+    # 5. Delete import history entry
+    imports_col.delete_one({"_id": imp_id})
+
+    # Ensure baseline electronic inventory is intact
+    ensure_permanent_electronic_inventory()
+
+    logger.info(
+        "Import batch %s (%s) deleted: %d proc records, %d exp records, %d prods removed.",
+        batch_str, filename, proc_del_res.deleted_count, exp_del_res.deleted_count, prod_del_res.deleted_count
+    )
+
+    return {
+        "success": True,
+        "import_batch_id": batch_str,
+        "filename": filename,
+        "deleted_procurement_records": proc_del_res.deleted_count,
+        "deleted_expense_records": exp_del_res.deleted_count,
+        "deleted_products": prod_del_res.deleted_count,
+        "status": "deleted"
+    }
+
+
+def clean_legacy_sample_data() -> Dict[str, Any]:
+    """
+    Find and safely purge any legacy sample Excel imports and their records.
+    Explicitly preserves all legitimate permanent electronic equipment data.
+    """
+    imports_col = get_imports_collection()
+    proc_col = get_procurement_collection()
+    exp_col = get_expenses_collection()
+    prod_col = get_products_collection()
+
+    # Identify sample imports by filename or pattern
+    sample_filename_patterns = [
+        re.compile(r"sample.*\.xlsx?", re.I),
+        re.compile(r".*sample.*procurement.*", re.I),
+        re.compile(r".*sample.*expense.*", re.I),
+    ]
+
+    sample_imports = []
+    for imp in imports_col.find({}):
+        fn = imp.get("filename", "")
+        if any(p.search(fn) for p in sample_filename_patterns) or imp.get("uploaded_by") in ("test_runner", "system_sample"):
+            sample_imports.append(imp)
+
+    results = []
+    for imp in sample_imports:
+        res = delete_import_batch(str(imp["_id"]))
+        results.append(res)
+
+    # Also clean any orphaned sample procurement/expense records if filename matches sample
+    orphan_proc_del = proc_col.delete_many({
+        "source_file": {"$regex": "sample", "$options": "i"}
+    })
+    orphan_exp_del = exp_col.delete_many({
+        "source_file": {"$regex": "sample", "$options": "i"}
+    })
+
+    # Remove any products that have source_type == 'excel_import' and were sourced from sample files
+    sample_prods_del = prod_col.delete_many({
+        "source_type": "excel_import",
+        "source_files": {"$elemMatch": {"$regex": "sample", "$options": "i"}},
+    })
+
+    # Guarantee all 39 legitimate electronic equipment products are preserved in MongoDB
+    ensure_permanent_electronic_inventory()
+
+    return {
+        "success": True,
+        "cleaned_import_batches": results,
+        "orphan_procurements_removed": orphan_proc_del.deleted_count,
+        "orphan_expenses_removed": orphan_exp_del.deleted_count,
+        "sample_products_removed": sample_prods_del.deleted_count,
+        "permanent_products_count": prod_col.count_documents({"source_type": "permanent_inventory"}),
+    }

@@ -1,6 +1,8 @@
 import logging
 from typing import Optional
+# pyrefly: ignore [missing-import]
 import pymongo
+# pyrefly: ignore [missing-import]
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 
 from config import MONGODB_URI, MONGODB_DATABASE
@@ -43,6 +45,7 @@ def get_mongo_client() -> pymongo.MongoClient:
             str(exc),
         )
         try:
+            # pyrefly: ignore [missing-import]
             import mongomock
             _client = mongomock.MongoClient()
             _db = _client[MONGODB_DATABASE]
