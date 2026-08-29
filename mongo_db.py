@@ -81,6 +81,14 @@ def get_imports_collection():
     return get_mongo_db()["import_history"]
 
 
+def get_conversations_collection():
+    return get_mongo_db()["conversations"]
+
+
+def get_messages_collection():
+    return get_mongo_db()["messages"]
+
+
 def init_mongo_indexes():
     """
     Create unique and search indexes on MongoDB collections.
@@ -90,6 +98,8 @@ def init_mongo_indexes():
     procurement = db["procurement_records"]
     expenses = db["expense_records"]
     imports = db["import_history"]
+    conversations = db["conversations"]
+    messages = db["messages"]
 
     try:
         # Unique index on normalized_name to prevent duplicate products
@@ -118,6 +128,12 @@ def init_mongo_indexes():
         expenses.create_index("expense_month")
 
         imports.create_index([("upload_timestamp", pymongo.DESCENDING)])
+
+        # Conversation indexes
+        conversations.create_index([("user_id", pymongo.ASCENDING), ("updated_at", pymongo.DESCENDING)])
+        conversations.create_index("id", unique=True)
+        messages.create_index([("conversation_id", pymongo.ASCENDING), ("created_at", pymongo.ASCENDING)])
+        messages.create_index("id", unique=True)
 
         logger.info("MongoDB indexes initialized successfully.")
     except Exception as e:

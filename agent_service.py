@@ -5,6 +5,7 @@ from typing import AsyncGenerator, Optional, List, Dict, Any
 
 # pyrefly: ignore [missing-import]
 from langchain_google_genai import ChatGoogleGenerativeAI
+# pyrefly: ignore [missing-import]
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from config import GEMINI_API_KEY, GEMINI_MODEL
@@ -45,14 +46,13 @@ def get_llm():
 # ============================================================
 
 SYSTEM_PROMPT = """
-You are an intelligent AI Assistant for a Real Inventory Management & Procurement System.
+You are an intelligent, helpful AI Assistant for an Inventory Management & Procurement Intelligence System.
 
-CRITICAL INVENTORY RULES:
-1. Never invent or hallucinate inventory data, stock quantities, suppliers, prices, or expense figures.
-2. The MongoDB database is the absolute single source of truth.
-3. If a product or component is not found in the database, clearly and explicitly state that it does not exist in the inventory records.
-4. For technical, functional, or policy questions not answered by live stock counts, refer to the provided knowledge base context.
-5. Always format numbers, currencies (₹ / $), and item names cleanly.
+Guidelines:
+1. Greet users pleasantly and converse naturally for greetings ("Hi", "Hello", "How are you?"), identity questions ("Who are you?", "What can you do?"), or general queries.
+2. For inventory questions, always rely strictly on the provided real inventory facts and never hallucinate or invent product stock or suppliers.
+3. Help users understand components, microcontroller development boards, sensors, actuators, stock alerts, and procurement workflows.
+4. Format responses cleanly with bold labels, structured bullet points, and appropriate rupee currency (₹) symbols.
 """
 
 
@@ -332,6 +332,42 @@ async def stream_agent_response(
             "message": full_msg,
             "data": items,
             "data_type": "inventory",
+        }
+        return
+
+    # --------------------------------------------------------
+    # 2b. GENERAL REQUIREMENTS INTENT
+    # --------------------------------------------------------
+    if _has_keyword(lower, [
+        "what items are required", "what components are required",
+        "which items are required", "which components are required",
+        "pending requirements", "required items", "required components",
+        "what is required", "what are required"
+    ]):
+        logger.info("Handling Intent: general_requirements")
+        all_prods = get_all_products()
+        req_prods = [
+            p for p in all_prods
+            if (p.get("total_qty_required", 0) > 0 or p.get("pending_requirements", 0) > 0)
+        ]
+        if not req_prods:
+            full_msg = "📋 Currently, there are **no active pending requirements** in the MongoDB inventory records."
+        else:
+            lines = [
+                f"- **{p['name']}**: Required: **{p.get('total_qty_required', 0)} units** | Pending: {p.get('pending_requirements', 0)} units | Supplier: **{p.get('supplier')}**"
+                for p in req_prods
+            ]
+            full_msg = (
+                f"📋 Found **{len(req_prods)} component(s)** with active requirements in MongoDB:\n\n"
+                + "\n".join(lines)
+            )
+        async for ev in _stream_text(full_msg):
+            yield ev
+        yield {
+            "type": "done",
+            "message": full_msg,
+            "data": req_prods,
+            "data_type": "component",
         }
         return
 

@@ -1,12 +1,18 @@
 import json
 import logging
 from datetime import datetime
+from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 
 from models import Conversation, Message
+from mongo_db import get_conversations_collection, get_messages_collection
 
 logger = logging.getLogger("conversation_service")
 
+
+# ============================================================
+# CONVERSATIONS MANAGEMENT (SQLITE + MONGODB PERSISTENCE)
+# ============================================================
 
 def list_conversations(db: Session, user_id: str) -> list[Conversation]:
     """Retrieve all conversations for a specific user ordered by last update."""
@@ -47,6 +53,24 @@ def create_conversation(
     db.add(conv)
     db.commit()
     db.refresh(conv)
+
+    # Replicate to MongoDB
+    try:
+        col = get_conversations_collection()
+        col.update_one(
+            {"id": conv.id},
+            {"$set": {
+                "id": conv.id,
+                "user_id": user_id,
+                "title": conv.title,
+                "created_at": conv.created_at,
+                "updated_at": conv.updated_at,
+            }},
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.warning("MongoDB conversation sync warning: %s", exc)
+
     logger.info("Created conversation %s for user %s", conv.id, user_id)
     return conv
 
@@ -65,6 +89,20 @@ def update_conversation_title(
     conv.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(conv)
+
+    # Replicate to MongoDB
+    try:
+        col = get_conversations_collection()
+        col.update_one(
+            {"id": conv.id},
+            {"$set": {
+                "title": conv.title,
+                "updated_at": conv.updated_at,
+            }}
+        )
+    except Exception as exc:
+        logger.warning("MongoDB conversation update warning: %s", exc)
+
     return conv
 
 
@@ -79,6 +117,16 @@ def delete_conversation(
         return False
     db.delete(conv)
     db.commit()
+
+    # Replicate to MongoDB
+    try:
+        conv_col = get_conversations_collection()
+        msg_col = get_messages_collection()
+        conv_col.delete_one({"id": conversation_id})
+        msg_col.delete_many({"conversation_id": conversation_id})
+    except Exception as exc:
+        logger.warning("MongoDB conversation delete warning: %s", exc)
+
     logger.info("Deleted conversation %s", conversation_id)
     return True
 
@@ -88,7 +136,7 @@ def add_message(
     conversation_id: str,
     role: str,
     content: str,
-    extra_data: str | dict | None = None,
+    extra_data: str | dict | list | None = None,
 ) -> Message:
     """Add a message to a conversation."""
     if isinstance(extra_data, (dict, list)):
@@ -117,6 +165,28 @@ def add_message(
 
     db.commit()
     db.refresh(msg)
+
+    # Replicate to MongoDB
+    try:
+        msg_col = get_messages_collection()
+        msg_col.insert_one({
+            "id": msg.id,
+            "conversation_id": conversation_id,
+            "role": role,
+            "content": content,
+            "extra_data": extra_data if not isinstance(extra_data, str) else extra_data_str,
+            "created_at": msg.created_at,
+        })
+        if conv:
+            conv_col = get_conversations_collection()
+            conv_col.update_one(
+                {"id": conv.id},
+                {"$set": {"updated_at": conv.updated_at, "title": conv.title}},
+                upsert=True,
+            )
+    except Exception as exc:
+        logger.warning("MongoDB message sync warning: %s", exc)
+
     return msg
 
 
