@@ -90,6 +90,9 @@
                 <button class="notify-btn" onclick="quickAsk('Which items are low stock?')">
                     Low Stock Alerts (<span id="low-stock-badge">{{ stats.low_stock if stats else '0' }}</span>)
                 </button>
+                <button class="header-export-btn" onclick="downloadMasterSheet()" title="Download current live Master Sheet (.xlsx)">
+                    📥 Export Master Sheet
+                </button>
             </div>
         </header>
 
@@ -281,6 +284,7 @@
                             <option value="">All Categories</option>
                         </select>
                         <button class="mini-btn primary" onclick="refreshDashboardData()">🔄 Refresh</button>
+                        <button class="mini-btn success" id="btn-download-master-sheet" onclick="downloadMasterSheet()" title="Export current MongoDB inventory to Excel">📥 Download Master Sheet</button>
                     </div>
                 </div>
 

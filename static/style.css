@@ -326,6 +326,27 @@ body {
     background: #fecaca;
 }
 
+.header-export-btn {
+    padding: 8px 16px;
+    background: #ecfdf5;
+    color: #065f46;
+    border: 1px solid #a7f3d0;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.header-export-btn:hover {
+    background: #d1fae5;
+    border-color: #6ee7b7;
+    transform: translateY(-1px);
+}
+
 /* ============================================================
    STATS GRID
    ============================================================ */
@@ -1331,6 +1352,16 @@ body {
 
 .mini-btn.primary:hover {
     background: var(--primary-hover);
+}
+
+.mini-btn.success {
+    background: #10b981;
+    color: #ffffff;
+    border-color: #059669;
+}
+
+.mini-btn.success:hover {
+    background: #059669;
 }
 
 .mini-btn.delete {

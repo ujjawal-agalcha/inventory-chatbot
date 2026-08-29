@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+from datetime import datetime
 from typing import Optional, List
 from pathlib import Path
 
@@ -77,6 +78,10 @@ from services.excel_import_service import (
     process_procurement_data,
     process_expenses_data,
     auto_detect_and_import,
+)
+
+from services.excel_export_service import (
+    generate_master_sheet_bytes,
 )
 
 from services.conversation_service import (
@@ -452,6 +457,34 @@ def remove_conversation(
 def inventory_list():
     """Retrieve all Master Inventory items from MongoDB."""
     return get_all_products()
+
+
+@app.get("/api/inventory/master-sheet/download")
+def download_master_sheet(
+    user: User = Depends(get_current_user),
+):
+    """
+    Generate and download a fresh Master Sheet from current MongoDB inventory data.
+    Requires authenticated company user.
+    """
+    try:
+        excel_bytes = generate_master_sheet_bytes()
+        filename = f"Master_Inventory_Sheet_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+
+        return Response(
+            content=excel_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
+    except Exception as e:
+        logger.exception("Failed to generate master sheet: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to generate master sheet: {str(e)}")
+
 
 
 @app.get("/api/inventory/low-stock")
