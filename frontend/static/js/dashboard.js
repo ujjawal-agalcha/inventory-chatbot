@@ -3,446 +3,1618 @@
 // ============================================================
 
 let masterInventory = [];
+
 let chartMonthly = null;
 let chartCategory = null;
 let chartTopExp = null;
 let chartSupplier = null;
 
+
 // ============================================================
-// INITIALIZATION & MAIN NAVIGATION
+// INITIALIZATION
 // ============================================================
 
 document.addEventListener("DOMContentLoaded", async () => {
-    if (typeof setupDropZones === "function") setupDropZones();
-    await loadUser();
-    await loadStats();
-    await loadCategories();
-    if (typeof loadConversations === "function") await loadConversations();
-    if (typeof connectWebSocket === "function") connectWebSocket();
+    try {
+        if (typeof setupDropZones === "function") {
+            setupDropZones();
+        }
+
+        await loadUser();
+        await loadStats();
+        await loadCategories();
+
+        if (typeof loadConversations === "function") {
+            await loadConversations();
+        }
+
+        if (typeof connectWebSocket === "function") {
+            connectWebSocket();
+        }
+    } catch (error) {
+        console.error("Dashboard initialization error:", error);
+    }
 });
 
+
+// ============================================================
+// NAVIGATION
+// ============================================================
+
 function switchMainTab(tabId) {
-    const views = ["chat", "inventory", "analytics", "upload"];
-    views.forEach(v => {
-        const viewEl = document.getElementById(`view-${v}`);
-        const btnEl = document.getElementById(`tab-btn-${v}`);
-        if (viewEl) viewEl.style.display = (v === tabId) ? "block" : "none";
-        if (btnEl) {
-            if (v === tabId) btnEl.classList.add("active");
-            else btnEl.classList.remove("active");
+
+    const views = [
+        "chat",
+        "inventory",
+        "analytics",
+        "upload"
+    ];
+
+    views.forEach(view => {
+
+        const viewElement =
+            document.getElementById(`view-${view}`);
+
+        const buttonElement =
+            document.getElementById(`tab-btn-${view}`);
+
+        if (viewElement) {
+            viewElement.style.display =
+                view === tabId ? "block" : "none";
+        }
+
+        if (buttonElement) {
+            buttonElement.classList.toggle(
+                "active",
+                view === tabId
+            );
         }
     });
 
-    const pageTitle = document.getElementById("page-title");
-    const pageSubtitle = document.getElementById("page-subtitle");
+
+    const pageTitle =
+        document.getElementById("page-title");
+
+    const pageSubtitle =
+        document.getElementById("page-subtitle");
+
 
     if (tabId === "chat") {
-        if (pageTitle) pageTitle.textContent = "Inventory Intelligence";
-        if (pageSubtitle) pageSubtitle.textContent = "Real-time stock assistance, procurement intelligence & AI assistant";
+
+        if (pageTitle) {
+            pageTitle.textContent =
+                "Inventory Intelligence";
+        }
+
+        if (pageSubtitle) {
+            pageSubtitle.textContent =
+                "Real-time stock assistance, procurement intelligence & AI assistant";
+        }
+
     } else if (tabId === "inventory") {
-        if (pageTitle) pageTitle.textContent = "Inventory Management";
-        if (pageSubtitle) pageSubtitle.textContent = "Real-time inventory records. Click Edit to update stock or thresholds.";
-        if (typeof loadInventoryTabTable === "function") loadInventoryTabTable();
+
+        if (pageTitle) {
+            pageTitle.textContent =
+                "Inventory Management";
+        }
+
+        if (pageSubtitle) {
+            pageSubtitle.textContent =
+                "Real-time inventory records. Click Edit to update stock or thresholds.";
+        }
+
+        if (typeof loadInventoryTabTable === "function") {
+            loadInventoryTabTable();
+        }
+
     } else if (tabId === "analytics") {
-        if (pageTitle) pageTitle.textContent = "Real-Time Analytical Dashboard";
-        if (pageSubtitle) pageSubtitle.textContent = "Interactive spending trends, category breakdown & master inventory";
+
+        if (pageTitle) {
+            pageTitle.textContent =
+                "Real-Time Analytical Dashboard";
+        }
+
+        if (pageSubtitle) {
+            pageSubtitle.textContent =
+                "Interactive spending trends, category breakdown & master inventory";
+        }
+
         refreshDashboardData();
+
     } else if (tabId === "upload") {
-        if (pageTitle) pageTitle.textContent = "Excel Ingestion & Integration Hub";
-        if (pageSubtitle) pageSubtitle.textContent = "Upload workbooks with duplicate prevention & auto categorization";
-        if (typeof loadImportHistory === "function") loadImportHistory();
+
+        if (pageTitle) {
+            pageTitle.textContent =
+                "Excel Ingestion & Integration Hub";
+        }
+
+        if (pageSubtitle) {
+            pageSubtitle.textContent =
+                "Upload workbooks with duplicate prevention & auto categorization";
+        }
+
+        if (typeof loadImportHistory === "function") {
+            loadImportHistory();
+        }
     }
 }
+
+
+// ============================================================
+// USER
+// ============================================================
 
 async function loadUser() {
+
     try {
-        const token = getToken();
-        const res = await fetch("/api/auth/me", {
-            headers: token ? { "Authorization": `Bearer ${token}` } : {}
-        });
-        if (res.ok) {
-            const user = await res.json();
-            const avatar = document.getElementById("sidebar-avatar");
-            const nameEl = document.getElementById("sidebar-name");
-            if (avatar && user.name) avatar.textContent = user.name.charAt(0).toUpperCase();
-            if (nameEl && user.name) nameEl.textContent = user.name;
+
+        const token =
+            typeof getToken === "function"
+                ? getToken()
+                : localStorage.getItem("access_token");
+
+        const response = await fetch(
+            "/api/auth/me",
+            {
+                headers: token
+                    ? {
+                        "Authorization":
+                            `Bearer ${token}`
+                    }
+                    : {}
+            }
+        );
+
+        if (!response.ok) {
+            return;
         }
-    } catch (e) {
-        console.warn("Could not fetch user profile:", e);
+
+        const user = await response.json();
+
+        const avatar =
+            document.getElementById("sidebar-avatar");
+
+        const nameElement =
+            document.getElementById("sidebar-name");
+
+        if (avatar && user.name) {
+            avatar.textContent =
+                user.name.charAt(0).toUpperCase();
+        }
+
+        if (nameElement && user.name) {
+            nameElement.textContent =
+                user.name;
+        }
+
+    } catch (error) {
+
+        console.warn(
+            "Could not fetch user profile:",
+            error
+        );
     }
 }
 
-function handleLogout(e) {
-    e.preventDefault();
+
+// ============================================================
+// LOGOUT
+// ============================================================
+
+function handleLogout(event) {
+
+    if (event) {
+        event.preventDefault();
+    }
+
     localStorage.removeItem("access_token");
     localStorage.removeItem("user");
-    localStorage.removeItem("active_conversation_id");
+    localStorage.removeItem(
+        "active_conversation_id"
+    );
+
     window.location.href = "/logout";
 }
 
+
 // ============================================================
-// STATS & CATEGORIES
+// STATS
 // ============================================================
 
 async function loadStats() {
-    try {
-        const res = await fetch("/api/inventory/stats");
-        if (res.ok) {
-            const stats = await res.json();
-            const elTotal = document.getElementById("stat-total");
-            const elLow = document.getElementById("stat-low");
-            const elUnits = document.getElementById("stat-units");
-            const elExp = document.getElementById("stat-expenses");
-            const elBadge = document.getElementById("low-stock-badge");
 
-            if (elTotal) elTotal.textContent = stats.total_components;
-            if (elLow) elLow.textContent = stats.low_stock;
-            if (elUnits) elUnits.textContent = Number(stats.total_units).toLocaleString();
-            if (elExp) elExp.textContent = "₹" + Number(stats.total_expenses).toLocaleString(undefined, { maximumFractionDigits: 0 });
-            if (elBadge) elBadge.textContent = stats.low_stock;
+    try {
+
+        const response =
+            await fetch("/api/inventory/stats");
+
+        if (!response.ok) {
+            console.warn(
+                "Inventory stats request failed:",
+                response.status
+            );
+            return;
         }
-    } catch (e) {
-        console.warn("Could not load stats:", e);
+
+        const stats =
+            await response.json();
+
+
+        const totalElement =
+            document.getElementById("stat-total");
+
+        const lowElement =
+            document.getElementById("stat-low");
+
+        const unitsElement =
+            document.getElementById("stat-units");
+
+        const expensesElement =
+            document.getElementById("stat-expenses");
+
+        const badgeElement =
+            document.getElementById("low-stock-badge");
+
+
+        if (totalElement) {
+            totalElement.textContent =
+                Number(stats.total_components || 0)
+                    .toLocaleString();
+        }
+
+        if (lowElement) {
+            lowElement.textContent =
+                Number(stats.low_stock || 0)
+                    .toLocaleString();
+        }
+
+        if (unitsElement) {
+            unitsElement.textContent =
+                Number(stats.total_units || 0)
+                    .toLocaleString();
+        }
+
+        if (expensesElement) {
+            expensesElement.textContent =
+                "₹" +
+                Number(stats.total_expenses || 0)
+                    .toLocaleString(
+                        undefined,
+                        {
+                            maximumFractionDigits: 0
+                        }
+                    );
+        }
+
+        if (badgeElement) {
+            badgeElement.textContent =
+                Number(stats.low_stock || 0);
+        }
+
+    } catch (error) {
+
+        console.warn(
+            "Could not load stats:",
+            error
+        );
     }
 }
 
-async function loadCategories() {
-    const grid = document.getElementById("category-grid");
-    if (!grid) return;
-
-    try {
-        const res = await fetch("/api/dashboard/analytics");
-        if (res.ok) {
-            const data = await res.json();
-            const categories = data.categories || [];
-
-            if (categories.length === 0) {
-                grid.innerHTML = `
-                    <div class="conv-item-empty">
-                        No inventory data yet.<br>Upload Excel files in the <strong>Excel Import Hub</strong> to populate.
-                    </div>
-                `;
-                return;
-            }
-
-            const icons = ["📦", "📄", "⚙️", "🖥️", "🔋", "🔌", "📊", "🔀", "🚚", "💡"];
-            grid.innerHTML = categories.map((cat, idx) => `
-                <div class="category-card" onclick="quickAsk('Show all ${escapeHtml(cat.category)}')">
-                    <div class="category-icon">${icons[idx % icons.length]}</div>
-                    <div class="category-info">
-                        <h4>${escapeHtml(cat.category)}</h4>
-                        <p>${cat.count} product(s) · ${cat.units} units · ₹${Number(cat.expense).toLocaleString()}</p>
-                    </div>
-                </div>
-            `).join("");
-        }
-    } catch (e) {
-        console.warn("Could not load dynamic categories:", e);
-    }
-}
 
 // ============================================================
-// DASHBOARD ANALYTICS & CHARTS
+// CATEGORIES
+// ============================================================
+
+async function loadCategories() {
+
+    const grid =
+        document.getElementById("category-grid");
+
+    if (!grid) {
+        return;
+    }
+
+    try {
+
+        const response =
+            await fetch("/api/dashboard/analytics");
+
+        if (!response.ok) {
+            return;
+        }
+
+        const data =
+            await response.json();
+
+        const categories =
+            Array.isArray(data.categories)
+                ? data.categories
+                : [];
+
+
+        if (categories.length === 0) {
+
+            grid.innerHTML = `
+                <div class="conv-item-empty">
+                    No inventory data yet.<br>
+                    Upload Excel files in the
+                    <strong>Excel Import Hub</strong>
+                    to populate.
+                </div>
+            `;
+
+            return;
+        }
+
+
+        const icons = [
+            "📦",
+            "📄",
+            "⚙️",
+            "🖥️",
+            "🔋",
+            "🔌",
+            "📊",
+            "🔀",
+            "🚚",
+            "💡"
+        ];
+
+
+        grid.innerHTML =
+            categories.map(
+                (category, index) => {
+
+                    const name =
+                        category.category || "Unknown";
+
+                    const count =
+                        Number(category.count || 0);
+
+                    const units =
+                        Number(category.units || 0);
+
+                    const expense =
+                        Number(category.expense || 0);
+
+
+                    return `
+                        <div
+                            class="category-card"
+                            onclick="quickAsk('Show all ${escapeHtml(name)}')"
+                        >
+
+                            <div class="category-icon">
+                                ${icons[index % icons.length]}
+                            </div>
+
+                            <div class="category-info">
+
+                                <h4>
+                                    ${escapeHtml(name)}
+                                </h4>
+
+                                <p>
+                                    ${count} product(s)
+                                    · ${units} units
+                                    · ₹${expense.toLocaleString()}
+                                </p>
+
+                            </div>
+
+                        </div>
+                    `;
+                }
+            ).join("");
+
+    } catch (error) {
+
+        console.warn(
+            "Could not load dynamic categories:",
+            error
+        );
+    }
+}
+
+
+// ============================================================
+// DASHBOARD DATA
 // ============================================================
 
 async function refreshDashboardData() {
+
     try {
-        const res = await fetch("/api/dashboard/analytics");
-        if (res.ok) {
-            const data = await res.json();
-            await renderMasterTable();
-            renderCharts(data);
-            renderRecentProcurements(data.recent_procurements || []);
-            renderRecentExpenses(data.recent_expenses || []);
+
+        const response =
+            await fetch("/api/dashboard/analytics");
+
+        if (!response.ok) {
+
+            console.error(
+                "Analytics API failed:",
+                response.status
+            );
+
+            return;
         }
-    } catch (e) {
-        console.error("Error refreshing dashboard data:", e);
-    }
-}
 
-function renderCharts(data) {
-    if (typeof Chart === "undefined") return;
+        const data =
+            await response.json();
 
-    // 1. Monthly Expenses Trend
-    const ctxMonthly = document.getElementById("chart-monthly-expenses");
-    if (ctxMonthly) {
-        const monthly = data.monthly_expenses || [];
-        const labels = monthly.map(m => m.month);
-        const values = monthly.map(m => m.amount);
 
-        if (chartMonthly) chartMonthly.destroy();
-        chartMonthly = new Chart(ctxMonthly, {
-            type: "line",
-            data: {
-                labels: labels.length ? labels : ["No Data"],
-                datasets: [{
-                    label: "Monthly Spend (₹)",
-                    data: values.length ? values : [0],
-                    borderColor: "#4f46e5",
-                    backgroundColor: "rgba(79, 70, 229, 0.08)",
-                    borderWidth: 2.5,
-                    fill: true,
-                    tension: 0.3,
-                    pointBackgroundColor: "#4f46e5",
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: { y: { beginAtZero: true } }
-            }
-        });
-    }
+        console.log(
+            "[Dashboard] Analytics data:",
+            data
+        );
 
-    // 2. Category Breakdown
-    const ctxCategory = document.getElementById("chart-category-breakdown");
-    if (ctxCategory) {
-        const categories = data.categories || [];
-        const labels = categories.map(c => c.category);
-        const values = categories.map(c => c.units);
 
-        if (chartCategory) chartCategory.destroy();
-        chartCategory = new Chart(ctxCategory, {
-            type: "doughnut",
-            data: {
-                labels: labels.length ? labels : ["No Data"],
-                datasets: [{
-                    data: values.length ? values : [1],
-                    backgroundColor: ["#4f46e5", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4", "#64748b"],
-                    borderWidth: 2,
-                    borderColor: "#fff",
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { position: "right" } }
-            }
-        });
-    }
+        await renderMasterTable();
 
-    // 3. Top Expense Products
-    const ctxTopExp = document.getElementById("chart-top-expenses");
-    if (ctxTopExp) {
-        const topExp = data.top_expenses || [];
-        const labels = topExp.map(p => p.name);
-        const values = topExp.map(p => p.total_expense);
+        renderCharts(data);
 
-        if (chartTopExp) chartTopExp.destroy();
-        chartTopExp = new Chart(ctxTopExp, {
-            type: "bar",
-            data: {
-                labels: labels.length ? labels : ["No Data"],
-                datasets: [{
-                    label: "Total Expense (₹)",
-                    data: values.length ? values : [0],
-                    backgroundColor: "#8b5cf6",
-                    borderRadius: 6,
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                indexAxis: "y",
-                plugins: { legend: { display: false } }
-            }
-        });
-    }
+        renderRecentProcurements(
+            data.recent_procurements || []
+        );
 
-    // 4. Supplier Distribution
-    const ctxSupplier = document.getElementById("chart-supplier-distribution");
-    if (ctxSupplier) {
-        const suppliers = data.suppliers || [];
-        const labels = suppliers.map(s => s.supplier);
-        const values = suppliers.map(s => s.expense);
+        renderRecentExpenses(
+            data.recent_expenses || []
+        );
 
-        if (chartSupplier) chartSupplier.destroy();
-        chartSupplier = new Chart(ctxSupplier, {
-            type: "pie",
-            data: {
-                labels: labels.length ? labels : ["No Data"],
-                datasets: [{
-                    data: values.length ? values : [1],
-                    backgroundColor: ["#10b981", "#3b82f6", "#f59e0b", "#ec4899", "#4f46e5", "#06b6d4"],
-                    borderWidth: 2,
-                    borderColor: "#fff",
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { position: "right" } }
-            }
-        });
-    }
-}
+    } catch (error) {
 
-function toggleAllCharts() {
-    const container = document.getElementById("analytics-charts-container");
-    const btn = document.getElementById("btn-toggle-all-charts");
-    if (!container) return;
-
-    if (container.style.display === "none") {
-        container.style.display = "grid";
-        if (btn) btn.classList.add("active");
-    } else {
-        container.style.display = "none";
-        if (btn) btn.classList.remove("active");
+        console.error(
+            "Error refreshing dashboard data:",
+            error
+        );
     }
 }
 
 // ============================================================
-// MASTER INVENTORY TABLE & TRANSACTIONS
+// CHARTS
+// ============================================================
+
+async function renderCharts(data) {
+
+    if (typeof Chart === "undefined") {
+        console.error("Chart.js is not loaded.");
+        return;
+    }
+
+    // --------------------------------------------------------
+    // 1. MONTHLY EXPENSES
+    // --------------------------------------------------------
+
+    const monthlyCanvas =
+        document.getElementById("chart-monthly-expenses");
+
+    if (monthlyCanvas) {
+
+        const monthly =
+            Array.isArray(data.monthly_expenses)
+                ? data.monthly_expenses
+                : [];
+
+        const labels = monthly.map(item =>
+            item.month || "Unknown"
+        );
+
+        const values = monthly.map(item =>
+            Number(item.amount || 0)
+        );
+
+        if (chartMonthly) {
+            chartMonthly.destroy();
+            chartMonthly = null;
+        }
+
+        chartMonthly = new Chart(monthlyCanvas, {
+            type: "line",
+
+            data: {
+                labels: labels.length ? labels : ["No Data"],
+
+                datasets: [{
+                    label: "Monthly Spend (₹)",
+
+                    data: values.length ? values : [0],
+
+                    borderColor: "#4f46e5",
+
+                    backgroundColor:
+                        "rgba(79, 70, 229, 0.08)",
+
+                    borderWidth: 2.5,
+
+                    fill: true,
+
+                    tension: 0.3,
+
+                    pointBackgroundColor: "#4f46e5"
+                }]
+            },
+
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                },
+
+                scales: {
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    }
+
+
+    // --------------------------------------------------------
+    // 2. CATEGORY BREAKDOWN
+    // --------------------------------------------------------
+
+    const categoryCanvas =
+        document.getElementById("chart-category-breakdown");
+
+    if (categoryCanvas) {
+
+        const categories =
+            Array.isArray(data.categories)
+                ? data.categories
+                : [];
+
+        const labels = categories.map(item =>
+            item.category || "Unknown"
+        );
+
+        const values = categories.map(item =>
+            Number(item.units || 0)
+        );
+
+        if (chartCategory) {
+            chartCategory.destroy();
+            chartCategory = null;
+        }
+
+        chartCategory = new Chart(categoryCanvas, {
+            type: "doughnut",
+
+            data: {
+                labels: labels.length ? labels : ["No Data"],
+
+                datasets: [{
+                    data: values.length ? values : [1],
+
+                    backgroundColor: [
+                        "#4f46e5",
+                        "#3b82f6",
+                        "#10b981",
+                        "#f59e0b",
+                        "#8b5cf6",
+                        "#ec4899",
+                        "#06b6d4",
+                        "#64748b",
+                        "#ef4444",
+                        "#14b8a6",
+                        "#f97316",
+                        "#84cc16"
+                    ],
+
+                    borderWidth: 2,
+
+                    borderColor: "#fff"
+                }]
+            },
+
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+
+                plugins: {
+                    legend: {
+                        position: "right"
+                    }
+                }
+            }
+        });
+    }
+
+
+    // --------------------------------------------------------
+    // 3. TOP EXPENSE PRODUCTS
+    // --------------------------------------------------------
+
+    const topExpenseCanvas =
+        document.getElementById("chart-top-expenses");
+
+    if (topExpenseCanvas) {
+
+        const topExpenses =
+            Array.isArray(data.top_expenses)
+                ? data.top_expenses
+                : [];
+
+        const labels = topExpenses.map(item =>
+            item.name || "Unknown"
+        );
+
+        const values = topExpenses.map(item =>
+            Number(item.total_expense || 0)
+        );
+
+        if (chartTopExp) {
+            chartTopExp.destroy();
+            chartTopExp = null;
+        }
+
+        chartTopExp = new Chart(topExpenseCanvas, {
+            type: "bar",
+
+            data: {
+                labels: labels.length ? labels : ["No Data"],
+
+                datasets: [{
+                    label: "Total Expense (₹)",
+
+                    data: values.length ? values : [0],
+
+                    backgroundColor: "#8b5cf6",
+
+                    borderRadius: 6
+                }]
+            },
+
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+
+                indexAxis: "y",
+
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                }
+            }
+        });
+    }
+
+
+    // --------------------------------------------------------
+    // 4. SUPPLIER DISTRIBUTION
+    // --------------------------------------------------------
+    //
+    // IMPORTANT:
+    // Do NOT depend on data.suppliers here.
+    //
+    // The confirmed API endpoint is:
+    // /api/inventory/suppliers
+    //
+    // It returns:
+    // supplier
+    // product_count
+    // total_units
+    // total_expense
+    // products
+    //
+    // We fetch it directly.
+    // --------------------------------------------------------
+
+    const supplierCanvas =
+        document.getElementById(
+            "chart-supplier-distribution"
+        );
+
+    if (!supplierCanvas) {
+
+        console.error(
+            "Supplier chart canvas not found."
+        );
+
+        return;
+    }
+
+
+    try {
+
+        const supplierResponse =
+            await fetch("/api/inventory/suppliers");
+
+
+        if (!supplierResponse.ok) {
+
+            console.error(
+                "Supplier API failed:",
+                supplierResponse.status
+            );
+
+            return;
+        }
+
+
+        let supplierData =
+            await supplierResponse.json();
+
+
+        console.log(
+            "[Supplier Chart] Raw API response:",
+            supplierData
+        );
+
+
+        // ----------------------------------------------------
+        // Handle both:
+        //
+        // Array response:
+        // [...]
+        //
+        // PowerShell Invoke-RestMethod representation:
+        // { value: [...], Count: 12 }
+        //
+        // ----------------------------------------------------
+
+        let suppliers = [];
+
+
+        if (Array.isArray(supplierData)) {
+
+            suppliers = supplierData;
+
+        } else if (
+            supplierData &&
+            Array.isArray(supplierData.value)
+        ) {
+
+            suppliers = supplierData.value;
+
+        } else if (
+            supplierData &&
+            Array.isArray(supplierData.suppliers)
+        ) {
+
+            suppliers = supplierData.suppliers;
+
+        }
+
+
+        console.log(
+            "[Supplier Chart] Suppliers:",
+            suppliers
+        );
+
+
+        // ----------------------------------------------------
+        // Build labels and values
+        // ----------------------------------------------------
+
+        const labels = suppliers.map(
+            supplier =>
+                String(
+                    supplier.supplier || "Unknown"
+                )
+        );
+
+
+        const values = suppliers.map(
+            supplier =>
+                Number(
+                    supplier.total_units || 0
+                )
+        );
+
+
+        console.log(
+            "[Supplier Chart] Labels:",
+            labels
+        );
+
+
+        console.log(
+            "[Supplier Chart] Values:",
+            values
+        );
+
+
+        // ----------------------------------------------------
+        // Destroy previous chart
+        // ----------------------------------------------------
+
+        if (chartSupplier) {
+
+            chartSupplier.destroy();
+
+            chartSupplier = null;
+        }
+
+
+        // ----------------------------------------------------
+        // No supplier data
+        // ----------------------------------------------------
+
+        if (
+            suppliers.length === 0 ||
+            values.every(value => value === 0)
+        ) {
+
+            const parent =
+                supplierCanvas.parentElement;
+
+            if (parent) {
+
+                parent.innerHTML = `
+                    <div
+                        style="
+                            width:100%;
+                            height:100%;
+                            min-height:300px;
+                            display:flex;
+                            align-items:center;
+                            justify-content:center;
+                            color:#64748b;
+                            font-size:14px;
+                        "
+                    >
+                        No supplier distribution data available.
+                    </div>
+                `;
+            }
+
+            console.warn(
+                "[Supplier Chart] No usable supplier data."
+            );
+
+            return;
+        }
+
+
+        // ----------------------------------------------------
+        // Create supplier pie chart
+        // ----------------------------------------------------
+
+        chartSupplier =
+            new Chart(
+                supplierCanvas,
+                {
+                    type: "pie",
+
+                    data: {
+
+                        labels: labels,
+
+                        datasets: [
+                            {
+                                data: values,
+
+                                backgroundColor: [
+                                    "#10b981",
+                                    "#3b82f6",
+                                    "#f59e0b",
+                                    "#ec4899",
+                                    "#4f46e5",
+                                    "#06b6d4",
+                                    "#8b5cf6",
+                                    "#ef4444",
+                                    "#14b8a6",
+                                    "#f97316",
+                                    "#6366f1",
+                                    "#84cc16"
+                                ],
+
+                                borderWidth: 2,
+
+                                borderColor: "#ffffff"
+                            }
+                        ]
+                    },
+
+                    options: {
+
+                        responsive: true,
+
+                        maintainAspectRatio: false,
+
+                        plugins: {
+
+                            legend: {
+                                position: "right"
+                            },
+
+                            tooltip: {
+
+                                callbacks: {
+
+                                    label:
+                                        function(context) {
+
+                                            const supplier =
+                                                context.label ||
+                                                "Unknown";
+
+                                            const units =
+                                                Number(
+                                                    context.raw || 0
+                                                );
+
+
+                                            // Find supplier details
+                                            const supplierInfo =
+                                                suppliers.find(
+                                                    item =>
+                                                        String(
+                                                            item.supplier ||
+                                                            "Unknown"
+                                                        ) === supplier
+                                                );
+
+
+                                            const productCount =
+                                                supplierInfo
+                                                    ? Number(
+                                                        supplierInfo.product_count ||
+                                                        0
+                                                    )
+                                                    : 0;
+
+
+                                            return [
+                                                `${supplier}`,
+                                                `Stock: ${units.toLocaleString()} units`,
+                                                `Products: ${productCount}`
+                                            ];
+                                        }
+                                }
+                            }
+                        }
+                    }
+                }
+            );
+
+
+        console.log(
+            "[Supplier Chart] Chart created successfully."
+        );
+
+
+    } catch (error) {
+
+        console.error(
+            "[Supplier Chart] Failed to load:",
+            error
+        );
+    }
+}
+
+
+// ============================================================
+// TOGGLE CHARTS
+// ============================================================
+
+function toggleAllCharts() {
+
+    const container =
+        document.getElementById(
+            "analytics-charts-container"
+        );
+
+    const button =
+        document.getElementById(
+            "btn-toggle-all-charts"
+        );
+
+
+    if (!container) {
+        return;
+    }
+
+
+    const isHidden =
+        container.style.display === "none";
+
+
+    if (isHidden) {
+
+        container.style.display = "grid";
+
+        if (button) {
+            button.classList.add("active");
+        }
+
+    } else {
+
+        container.style.display = "none";
+
+        if (button) {
+            button.classList.remove("active");
+        }
+    }
+}
+
+
+// ============================================================
+// MASTER INVENTORY TABLE
 // ============================================================
 
 async function renderMasterTable() {
-    const tbody = document.getElementById("master-table-body");
-    const catSelect = document.getElementById("inventory-category-filter");
-    if (!tbody) return;
 
-    try {
-        const res = await fetch("/api/inventory");
-        if (res.ok) {
-            masterInventory = await res.json();
+    const tbody =
+        document.getElementById(
+            "master-table-body"
+        );
 
-            if (catSelect) {
-                const uniqueCats = Array.from(new Set(masterInventory.map(i => i.category).filter(Boolean)));
-                const currentVal = catSelect.value;
-                catSelect.innerHTML = `<option value="">All Categories</option>` + uniqueCats.map(c =>
-                    `<option value="${escapeHtml(c)}" ${c === currentVal ? 'selected' : ''}>${escapeHtml(c)}</option>`
-                ).join("");
-            }
+    const categorySelect =
+        document.getElementById(
+            "inventory-category-filter"
+        );
 
-            filterMasterTable();
-        }
-    } catch (e) {
-        console.error("Error loading master inventory table:", e);
-    }
-}
 
-function filterMasterTable() {
-    const tbody = document.getElementById("master-table-body");
-    if (!tbody) return;
-
-    const query = (document.getElementById("inventory-table-search")?.value || "").toLowerCase().trim();
-    const selectedCat = document.getElementById("inventory-category-filter")?.value || "";
-
-    const filtered = masterInventory.filter(item => {
-        const matchesQuery = !query ||
-            (item.name && item.name.toLowerCase().includes(query)) ||
-            (item.category && item.category.toLowerCase().includes(query)) ||
-            (item.sub_category && item.sub_category.toLowerCase().includes(query)) ||
-            (item.supplier && item.supplier.toLowerCase().includes(query)) ||
-            (item.details && item.details.toLowerCase().includes(query));
-
-        const matchesCat = !selectedCat || (item.category === selectedCat);
-        return matchesQuery && matchesCat;
-    });
-
-    if (filtered.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="10" class="text-center">No matching inventory items found.</td></tr>`;
+    if (!tbody) {
         return;
     }
 
-    tbody.innerHTML = filtered.map(item => {
-        const stockBadge = (typeof getStockBadgeHtml === "function")
-            ? getStockBadgeHtml(item.stock, item.min_stock)
-            : `<span>${item.stock} units</span>`;
 
-        return `
+    try {
+
+        const response =
+            await fetch("/api/inventory");
+
+
+        if (!response.ok) {
+
+            console.error(
+                "Inventory API failed:",
+                response.status
+            );
+
+            return;
+        }
+
+
+        masterInventory =
+            await response.json();
+
+
+        if (!Array.isArray(masterInventory)) {
+            masterInventory = [];
+        }
+
+
+        if (categorySelect) {
+
+            const uniqueCategories =
+                Array.from(
+                    new Set(
+                        masterInventory
+                            .map(item => item.category)
+                            .filter(Boolean)
+                    )
+                );
+
+
+            const currentValue =
+                categorySelect.value;
+
+
+            categorySelect.innerHTML =
+                `<option value="">All Categories</option>` +
+                uniqueCategories
+                    .map(
+                        category => `
+                            <option
+                                value="${escapeHtml(category)}"
+                                ${category === currentValue
+                                    ? "selected"
+                                    : ""}
+                            >
+                                ${escapeHtml(category)}
+                            </option>
+                        `
+                    )
+                    .join("");
+        }
+
+
+        filterMasterTable();
+
+    } catch (error) {
+
+        console.error(
+            "Error loading master inventory table:",
+            error
+        );
+    }
+}
+
+
+// ============================================================
+// FILTER MASTER TABLE
+// ============================================================
+
+function filterMasterTable() {
+
+    const tbody =
+        document.getElementById(
+            "master-table-body"
+        );
+
+
+    if (!tbody) {
+        return;
+    }
+
+
+    const searchElement =
+        document.getElementById(
+            "inventory-table-search"
+        );
+
+
+    const categoryElement =
+        document.getElementById(
+            "inventory-category-filter"
+        );
+
+
+    const query =
+        (
+            searchElement?.value || ""
+        )
+            .toLowerCase()
+            .trim();
+
+
+    const selectedCategory =
+        categoryElement?.value || "";
+
+
+    const filtered =
+        masterInventory.filter(item => {
+
+            const name =
+                String(item.name || "")
+                    .toLowerCase();
+
+            const category =
+                String(item.category || "")
+                    .toLowerCase();
+
+            const subCategory =
+                String(item.sub_category || "")
+                    .toLowerCase();
+
+            const supplier =
+                String(item.supplier || "")
+                    .toLowerCase();
+
+            const details =
+                String(item.details || "")
+                    .toLowerCase();
+
+
+            const matchesSearch =
+                !query ||
+                name.includes(query) ||
+                category.includes(query) ||
+                subCategory.includes(query) ||
+                supplier.includes(query) ||
+                details.includes(query);
+
+
+            const matchesCategory =
+                !selectedCategory ||
+                item.category === selectedCategory;
+
+
+            return (
+                matchesSearch &&
+                matchesCategory
+            );
+        });
+
+
+    if (filtered.length === 0) {
+
+        tbody.innerHTML = `
             <tr>
-                <td>
-                    <strong>${escapeHtml(item.name)}</strong>
-                    ${item.details ? `<br><small class="text-muted">${escapeHtml(item.details)}</small>` : ''}
-                </td>
-                <td><span class="badge-tag">${escapeHtml(item.category)}</span></td>
-                <td><span class="badge-tag" style="background:#f1f5f9; color:#475569;">${escapeHtml(item.sub_category || '-')}</span></td>
-                <td>${stockBadge}</td>
-                <td>${item.min_stock} units</td>
-                <td>₹${Number(item.unit_price).toFixed(2)}</td>
-                <td>₹${Number(item.total_expense || 0).toLocaleString()}</td>
-                <td>${escapeHtml(item.supplier || 'Standard Vendor')}</td>
-                <td>
-                    <span class="status-badge ${item.is_low_stock ? 'low' : 'ok'}">
-                        ${item.is_low_stock ? '⚠️ Low Stock' : '✓ In Stock'}
-                    </span>
-                </td>
-                <td>
-                    <button class="edit-icon-btn" onclick="openEditModal('${item.id}')" title="Edit item">✏️ Edit</button>
+                <td
+                    colspan="10"
+                    class="text-center"
+                >
+                    No matching inventory items found.
                 </td>
             </tr>
         `;
-    }).join("");
-}
 
-function renderRecentProcurements(records) {
-    const tbody = document.getElementById("recent-procurements-body");
-    if (!tbody) return;
-
-    if (records.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="6" class="text-center">No procurement records available.</td></tr>`;
         return;
     }
 
-    tbody.innerHTML = records.map(r => `
-        <tr>
-            <td><strong>${escapeHtml(r.product_name)}</strong></td>
-            <td>${r.quantity}</td>
-            <td>₹${Number(r.unit_price).toFixed(2)}</td>
-            <td><span class="status-badge ${r.order_status?.toLowerCase() === 'fulfilled' ? 'ok' : 'low'}">${escapeHtml(r.order_status || 'Pending')}</span></td>
-            <td>${escapeHtml(r.vendor_name || 'Vendor')}</td>
-            <td>${escapeHtml(r.approved_by || '-')}</td>
-        </tr>
-    `).join("");
+
+    tbody.innerHTML =
+        filtered.map(item => {
+
+            const stock =
+                Number(item.stock ?? item.current_stock ?? 0);
+
+            const minStock =
+                Number(item.min_stock ?? 0);
+
+
+            const stockBadge =
+                typeof getStockBadgeHtml === "function"
+                    ? getStockBadgeHtml(
+                        stock,
+                        minStock
+                    )
+                    : `<span>${stock} units</span>`;
+
+
+            return `
+                <tr>
+
+                    <td>
+                        <strong>
+                            ${escapeHtml(
+                                item.name || "Unknown"
+                            )}
+                        </strong>
+
+                        ${
+                            item.details
+                                ? `
+                                    <br>
+                                    <small class="text-muted">
+                                        ${escapeHtml(
+                                            item.details
+                                        )}
+                                    </small>
+                                `
+                                : ""
+                        }
+                    </td>
+
+
+                    <td>
+                        <span class="badge-tag">
+                            ${escapeHtml(
+                                item.category || "-"
+                            )}
+                        </span>
+                    </td>
+
+
+                    <td>
+                        <span
+                            class="badge-tag"
+                            style="
+                                background:#f1f5f9;
+                                color:#475569;
+                            "
+                        >
+                            ${escapeHtml(
+                                item.sub_category || "-"
+                            )}
+                        </span>
+                    </td>
+
+
+                    <td>
+                        ${stockBadge}
+                    </td>
+
+
+                    <td>
+                        ${minStock} units
+                    </td>
+
+
+                    <td>
+                        ₹${Number(
+                            item.unit_price || 0
+                        ).toFixed(2)}
+                    </td>
+
+
+                    <td>
+                        ₹${Number(
+                            item.total_expense || 0
+                        ).toLocaleString()}
+                    </td>
+
+
+                    <td>
+                        ${escapeHtml(
+                            item.supplier ||
+                            "Standard Vendor"
+                        )}
+                    </td>
+
+
+                    <td>
+
+                        <span
+                            class="status-badge ${
+                                item.is_low_stock
+                                    ? "low"
+                                    : "ok"
+                            }"
+                        >
+                            ${
+                                item.is_low_stock
+                                    ? "⚠️ Low Stock"
+                                    : "✓ In Stock"
+                            }
+                        </span>
+
+                    </td>
+
+
+                    <td>
+
+                        <button
+                            class="edit-icon-btn"
+                            onclick="openEditModal('${item.id}')"
+                            title="Edit item"
+                        >
+                            ✏️ Edit
+                        </button>
+
+                    </td>
+
+                </tr>
+            `;
+        }).join("");
 }
 
-function renderRecentExpenses(records) {
-    const tbody = document.getElementById("recent-expenses-body");
-    if (!tbody) return;
-
-    if (records.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="6" class="text-center">No expense records available.</td></tr>`;
-        return;
-    }
-
-    tbody.innerHTML = records.map(e => `
-        <tr>
-            <td><strong>${escapeHtml(e.product_name)}</strong></td>
-            <td>${e.quantity}</td>
-            <td>₹${Number(e.amount).toLocaleString()}</td>
-            <td><span class="badge-tag">${escapeHtml(e.expense_month || '-')}</span></td>
-            <td><span class="status-badge ok">${escapeHtml(e.status || 'Paid')}</span></td>
-            <td><small>${escapeHtml(e.remark || '-')}</small></td>
-        </tr>
-    `).join("");
-}
 
 // ============================================================
-// KPI DRILL-DOWN MODAL
+// RECENT PROCUREMENT
+// ============================================================
+
+function renderRecentProcurements(records) {
+
+    const tbody =
+        document.getElementById(
+            "recent-procurements-body"
+        );
+
+
+    if (!tbody) {
+        return;
+    }
+
+
+    if (!records.length) {
+
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" class="text-center">
+                    No procurement records available.
+                </td>
+            </tr>
+        `;
+
+        return;
+    }
+
+
+    tbody.innerHTML =
+        records.map(record => `
+
+            <tr>
+
+                <td>
+                    <strong>
+                        ${escapeHtml(
+                            record.product_name || "-"
+                        )}
+                    </strong>
+                </td>
+
+                <td>
+                    ${Number(record.quantity || 0)}
+                </td>
+
+                <td>
+                    ₹${Number(
+                        record.unit_price || 0
+                    ).toFixed(2)}
+                </td>
+
+                <td>
+
+                    <span
+                        class="status-badge ${
+                            String(
+                                record.order_status || ""
+                            ).toLowerCase() ===
+                            "fulfilled"
+                                ? "ok"
+                                : "low"
+                        }"
+                    >
+                        ${escapeHtml(
+                            record.order_status ||
+                            "Pending"
+                        )}
+                    </span>
+
+                </td>
+
+                <td>
+                    ${escapeHtml(
+                        record.vendor_name ||
+                        "Vendor"
+                    )}
+                </td>
+
+                <td>
+                    ${escapeHtml(
+                        record.approved_by || "-"
+                    )}
+                </td>
+
+            </tr>
+
+        `).join("");
+}
+
+
+// ============================================================
+// RECENT EXPENSES
+// ============================================================
+
+function renderRecentExpenses(records) {
+
+    const tbody =
+        document.getElementById(
+            "recent-expenses-body"
+        );
+
+
+    if (!tbody) {
+        return;
+    }
+
+
+    if (!records.length) {
+
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" class="text-center">
+                    No expense records available.
+                </td>
+            </tr>
+        `;
+
+        return;
+    }
+
+
+    tbody.innerHTML =
+        records.map(record => `
+
+            <tr>
+
+                <td>
+                    <strong>
+                        ${escapeHtml(
+                            record.product_name || "-"
+                        )}
+                    </strong>
+                </td>
+
+                <td>
+                    ${Number(record.quantity || 0)}
+                </td>
+
+                <td>
+                    ₹${Number(
+                        record.amount || 0
+                    ).toLocaleString()}
+                </td>
+
+                <td>
+                    <span class="badge-tag">
+                        ${escapeHtml(
+                            record.expense_month || "-"
+                        )}
+                    </span>
+                </td>
+
+                <td>
+                    <span class="status-badge ok">
+                        ${escapeHtml(
+                            record.status || "Paid"
+                        )}
+                    </span>
+                </td>
+
+                <td>
+                    <small>
+                        ${escapeHtml(
+                            record.remark || "-"
+                        )}
+                    </small>
+                </td>
+
+            </tr>
+
+        `).join("");
+}
+
+
+// ============================================================
+// KPI MODAL
 // ============================================================
 
 async function openKPIModal(kpiType) {
-    const modal = document.getElementById("kpi-modal");
-    const titleEl = document.getElementById("kpi-modal-title");
-    const subtitleEl = document.getElementById("kpi-modal-subtitle");
-    const bodyEl = document.getElementById("kpi-modal-body");
 
-    if (!modal || !bodyEl) return;
+    const modal =
+        document.getElementById("kpi-modal");
+
+    const title =
+        document.getElementById(
+            "kpi-modal-title"
+        );
+
+    const subtitle =
+        document.getElementById(
+            "kpi-modal-subtitle"
+        );
+
+    const body =
+        document.getElementById(
+            "kpi-modal-body"
+        );
+
+
+    if (!modal || !body) {
+        return;
+    }
+
 
     modal.classList.add("active");
-    bodyEl.innerHTML = `<div class="loading-state">Loading metric details...</div>`;
+
+    body.innerHTML = `
+        <div class="loading-state">
+            Loading metric details...
+        </div>
+    `;
+
 
     try {
+
+        // ----------------------------------------------------
+        // TOTAL PRODUCTS
+        // ----------------------------------------------------
+
         if (kpiType === "total") {
-            titleEl.textContent = "📦 Total Registered Products";
-            subtitleEl.textContent = "All products currently managed in the inventory";
-            const res = await fetch("/api/inventory");
-            const prods = await res.json();
-            bodyEl.innerHTML = `
+
+            title.textContent =
+                "📦 Total Registered Products";
+
+            subtitle.textContent =
+                "All products currently managed in the inventory";
+
+
+            const response =
+                await fetch("/api/inventory");
+
+            const products =
+                await response.json();
+
+
+            body.innerHTML = `
+
                 <div class="table-responsive">
+
                     <table class="styled-table compact">
+
                         <thead>
+
                             <tr>
                                 <th>Product</th>
                                 <th>Category</th>
@@ -453,148 +1625,481 @@ async function openKPIModal(kpiType) {
                                 <th>Supplier</th>
                                 <th>Status</th>
                             </tr>
+
                         </thead>
+
                         <tbody>
-                            ${prods.map(p => `
+
+                            ${products.map(product => `
+
                                 <tr>
-                                    <td><strong>${escapeHtml(p.name)}</strong></td>
-                                    <td>${escapeHtml(p.category)}</td>
-                                    <td>${escapeHtml(p.sub_category || '-')}</td>
-                                    <td>${getStockBadgeHtml(p.stock, p.min_stock)}</td>
-                                    <td>${p.min_stock}</td>
-                                    <td>₹${Number(p.unit_price).toFixed(2)}</td>
-                                    <td>${escapeHtml(p.supplier)}</td>
-                                    <td><span class="status-badge ${p.is_low_stock ? 'low' : 'ok'}">${p.is_low_stock ? 'Low Stock' : 'In Stock'}</span></td>
+
+                                    <td>
+                                        <strong>
+                                            ${escapeHtml(
+                                                product.name || "-"
+                                            )}
+                                        </strong>
+                                    </td>
+
+                                    <td>
+                                        ${escapeHtml(
+                                            product.category || "-"
+                                        )}
+                                    </td>
+
+                                    <td>
+                                        ${escapeHtml(
+                                            product.sub_category || "-"
+                                        )}
+                                    </td>
+
+                                    <td>
+                                        ${getStockBadgeHtml(
+                                            product.stock,
+                                            product.min_stock
+                                        )}
+                                    </td>
+
+                                    <td>
+                                        ${product.min_stock || 0}
+                                    </td>
+
+                                    <td>
+                                        ₹${Number(
+                                            product.unit_price || 0
+                                        ).toFixed(2)}
+                                    </td>
+
+                                    <td>
+                                        ${escapeHtml(
+                                            product.supplier || "-"
+                                        )}
+                                    </td>
+
+                                    <td>
+
+                                        <span
+                                            class="status-badge ${
+                                                product.is_low_stock
+                                                    ? "low"
+                                                    : "ok"
+                                            }"
+                                        >
+                                            ${
+                                                product.is_low_stock
+                                                    ? "Low Stock"
+                                                    : "In Stock"
+                                            }
+                                        </span>
+
+                                    </td>
+
                                 </tr>
+
                             `).join("")}
+
                         </tbody>
+
                     </table>
+
                 </div>
             `;
+
+
+        // ----------------------------------------------------
+        // LOW STOCK
+        // ----------------------------------------------------
+
         } else if (kpiType === "low_stock") {
-            titleEl.textContent = "⚠️ Low Stock Alert Items";
-            subtitleEl.textContent = "Components requiring immediate procurement attention";
-            const res = await fetch("/api/inventory/low-stock");
-            const lowProds = await res.json();
-            bodyEl.innerHTML = lowProds.length === 0 ? `<div class="conv-item-empty">✅ All products have healthy stock levels!</div>` : `
-                <div class="table-responsive">
-                    <table class="styled-table compact">
-                        <thead>
-                            <tr>
-                                <th>Product</th>
-                                <th>Current Stock</th>
-                                <th>Min Threshold</th>
-                                <th>Supplier</th>
-                                <th>Action</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${lowProds.map(p => `
-                                <tr>
-                                    <td><strong>${escapeHtml(p.name)}</strong></td>
-                                    <td>${getStockBadgeHtml(p.stock, p.min_stock)}</td>
-                                    <td>${p.min_stock} units</td>
-                                    <td>${escapeHtml(p.supplier)}</td>
-                                    <td><button class="mini-btn primary" onclick="closeKPIModal(); quickAsk('Reorder 10 ${escapeHtml(p.name)}')">📦 Reorder</button></td>
-                                </tr>
-                            `).join("")}
-                        </tbody>
-                    </table>
-                </div>
-            `;
+
+            title.textContent =
+                "⚠️ Low Stock Alert Items";
+
+            subtitle.textContent =
+                "Components requiring immediate procurement attention";
+
+
+            const response =
+                await fetch(
+                    "/api/inventory/low-stock"
+                );
+
+            const products =
+                await response.json();
+
+
+            body.innerHTML =
+                products.length === 0
+
+                    ? `
+                        <div class="conv-item-empty">
+                            ✅ All products have healthy stock levels!
+                        </div>
+                    `
+
+                    : `
+
+                        <div class="table-responsive">
+
+                            <table class="styled-table compact">
+
+                                <thead>
+
+                                    <tr>
+                                        <th>Product</th>
+                                        <th>Current Stock</th>
+                                        <th>Min Threshold</th>
+                                        <th>Supplier</th>
+                                        <th>Action</th>
+                                    </tr>
+
+                                </thead>
+
+                                <tbody>
+
+                                    ${products.map(product => `
+
+                                        <tr>
+
+                                            <td>
+                                                <strong>
+                                                    ${escapeHtml(
+                                                        product.name || "-"
+                                                    )}
+                                                </strong>
+                                            </td>
+
+                                            <td>
+                                                ${getStockBadgeHtml(
+                                                    product.stock,
+                                                    product.min_stock
+                                                )}
+                                            </td>
+
+                                            <td>
+                                                ${product.min_stock || 0}
+                                                units
+                                            </td>
+
+                                            <td>
+                                                ${escapeHtml(
+                                                    product.supplier || "-"
+                                                )}
+                                            </td>
+
+                                            <td>
+
+                                                <button
+                                                    class="mini-btn primary"
+                                                    onclick="
+                                                        closeKPIModal();
+                                                        quickAsk(
+                                                            'Reorder 10 ${escapeHtml(
+                                                                product.name || ""
+                                                            )}'
+                                                        )
+                                                    "
+                                                >
+                                                    📦 Reorder
+                                                </button>
+
+                                            </td>
+
+                                        </tr>
+
+                                    `).join("")}
+
+                                </tbody>
+
+                            </table>
+
+                        </div>
+                    `;
+
+
+        // ----------------------------------------------------
+        // TOTAL UNITS
+        // ----------------------------------------------------
+
         } else if (kpiType === "units") {
-            titleEl.textContent = "🚚 Total Stock Units Distribution";
-            subtitleEl.textContent = "Product unit counts across categories";
-            const res = await fetch("/api/dashboard/analytics");
-            const data = await res.json();
-            bodyEl.innerHTML = `
+
+            title.textContent =
+                "🚚 Total Stock Units Distribution";
+
+            subtitle.textContent =
+                "Product unit counts across categories";
+
+
+            const response =
+                await fetch(
+                    "/api/dashboard/analytics"
+                );
+
+            const data =
+                await response.json();
+
+
+            body.innerHTML = `
+
                 <div class="table-responsive">
+
                     <table class="styled-table compact">
+
                         <thead>
+
                             <tr>
                                 <th>Category</th>
                                 <th>Products Count</th>
                                 <th>Total Stock Units</th>
                                 <th>Total Expense</th>
                             </tr>
+
                         </thead>
+
                         <tbody>
-                            ${(data.categories || []).map(c => `
+
+                            ${(data.categories || []).map(category => `
+
                                 <tr>
-                                    <td><strong>${escapeHtml(c.category)}</strong></td>
-                                    <td>${c.count}</td>
-                                    <td>${c.units} units</td>
-                                    <td>₹${Number(c.expense).toLocaleString()}</td>
+
+                                    <td>
+                                        <strong>
+                                            ${escapeHtml(
+                                                category.category || "-"
+                                            )}
+                                        </strong>
+                                    </td>
+
+                                    <td>
+                                        ${Number(
+                                            category.count || 0
+                                        )}
+                                    </td>
+
+                                    <td>
+                                        ${Number(
+                                            category.units || 0
+                                        ).toLocaleString()}
+                                        units
+                                    </td>
+
+                                    <td>
+                                        ₹${Number(
+                                            category.expense || 0
+                                        ).toLocaleString()}
+                                    </td>
+
                                 </tr>
+
                             `).join("")}
+
                         </tbody>
+
                     </table>
+
                 </div>
             `;
+
+
+        // ----------------------------------------------------
+        // EXPENSES
+        // ----------------------------------------------------
+
         } else if (kpiType === "expenses") {
-            titleEl.textContent = "💰 Expense Breakdown by Supplier & Month";
-            subtitleEl.textContent = "Procurement spend across vendors";
-            const res = await fetch("/api/dashboard/analytics");
-            const data = await res.json();
-            bodyEl.innerHTML = `
+
+            title.textContent =
+                "💰 Expense Breakdown by Supplier & Month";
+
+            subtitle.textContent =
+                "Procurement spend across vendors";
+
+
+            const response =
+                await fetch(
+                    "/api/dashboard/analytics"
+                );
+
+            const data =
+                await response.json();
+
+
+            body.innerHTML = `
+
                 <div class="table-responsive">
+
                     <table class="styled-table compact">
+
                         <thead>
+
                             <tr>
                                 <th>Supplier</th>
                                 <th>Products Supplied</th>
+                                <th>Total Units</th>
                                 <th>Total Spend</th>
                             </tr>
+
                         </thead>
+
                         <tbody>
-                            ${(data.suppliers || []).map(s => `
+
+                            ${(data.suppliers || []).map(supplier => `
+
                                 <tr>
-                                    <td><strong>${escapeHtml(s.supplier)}</strong></td>
-                                    <td>${s.count} items (${s.units} units)</td>
-                                    <td><strong>₹${Number(s.expense).toLocaleString()}</strong></td>
+
+                                    <td>
+                                        <strong>
+                                            ${escapeHtml(
+                                                supplier.supplier || "Unknown"
+                                            )}
+                                        </strong>
+                                    </td>
+
+                                    <td>
+                                        ${Number(
+                                            supplier.product_count || 0
+                                        )}
+                                        products
+                                    </td>
+
+                                    <td>
+                                        ${Number(
+                                            supplier.total_units || 0
+                                        ).toLocaleString()}
+                                        units
+                                    </td>
+
+                                    <td>
+                                        <strong>
+                                            ₹${Number(
+                                                supplier.total_expense || 0
+                                            ).toLocaleString()}
+                                        </strong>
+                                    </td>
+
                                 </tr>
+
                             `).join("")}
+
                         </tbody>
+
                     </table>
+
                 </div>
             `;
         }
-    } catch (e) {
-        console.error("Error opening KPI modal:", e);
-        bodyEl.innerHTML = `<div class="conv-item-empty">Failed to load details.</div>`;
+
+    } catch (error) {
+
+        console.error(
+            "Error opening KPI modal:",
+            error
+        );
+
+        body.innerHTML = `
+            <div class="conv-item-empty">
+                Failed to load details.
+            </div>
+        `;
     }
 }
 
-function closeKPIModal() {
-    const modal = document.getElementById("kpi-modal");
-    if (modal) modal.classList.remove("active");
-}
 
 // ============================================================
-// MASTER SHEET EXCEL EXPORT
+// CLOSE KPI MODAL
+// ============================================================
+
+function closeKPIModal() {
+
+    const modal =
+        document.getElementById(
+            "kpi-modal"
+        );
+
+    if (modal) {
+        modal.classList.remove("active");
+    }
+}
+
+
+// ============================================================
+// MASTER SHEET DOWNLOAD
 // ============================================================
 
 async function downloadMasterSheet() {
-    const token = getToken();
+
     try {
-        const res = await fetch("/api/inventory/master-sheet/download", {
-            headers: token ? { "Authorization": `Bearer ${token}` } : {}
-        });
-        if (!res.ok) {
-            alert("Failed to generate master sheet.");
+
+        const token =
+            typeof getToken === "function"
+                ? getToken()
+                : localStorage.getItem("access_token");
+
+
+        const response =
+            await fetch(
+                "/api/inventory/master-sheet/download",
+                {
+                    headers:
+                        token
+                            ? {
+                                "Authorization":
+                                    `Bearer ${token}`
+                            }
+                            : {}
+                }
+            );
+
+
+        if (!response.ok) {
+
+            alert(
+                "Failed to generate master sheet."
+            );
+
             return;
         }
-        const blob = await res.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `Master_Inventory_Sheet_${new Date().toISOString().slice(0, 10)}.xlsx`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
+
+
+        const blob =
+            await response.blob();
+
+
+        const url =
+            window.URL.createObjectURL(blob);
+
+
+        const anchor =
+            document.createElement("a");
+
+
+        anchor.href = url;
+
+        anchor.download =
+            `Master_Inventory_Sheet_${new Date()
+                .toISOString()
+                .slice(0, 10)
+            }.xlsx`;
+
+
+        document.body.appendChild(anchor);
+
+        anchor.click();
+
+        anchor.remove();
+
+
         window.URL.revokeObjectURL(url);
-    } catch (e) {
-        console.error("Error downloading master sheet:", e);
-        alert("Error generating master sheet.");
+
+    } catch (error) {
+
+        console.error(
+            "Error downloading master sheet:",
+            error
+        );
+
+        alert(
+            "Error generating master sheet."
+        );
     }
 }
