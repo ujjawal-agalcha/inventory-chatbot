@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, List, Tuple, Optional
 import openpyxl
+# pyrefly: ignore [missing-import]
 from bson import ObjectId
 
 from mongo_db import (
@@ -153,6 +154,63 @@ def infer_category(name: str, details: str = "") -> str:
     return "General Supplies"
 
 
+def extract_category_and_subcategory(
+    filename: str = "",
+    sheet_name: str = "",
+    item_name: str = "",
+    details: str = "",
+    row_category: Optional[str] = None,
+    row_subcategory: Optional[str] = None,
+) -> Tuple[str, str]:
+    """
+    Extract normalized Category and Sub-category from filename, sheet name, row data, or inferred keywords.
+    E.g.
+    'Procurement - Nuts & Bolts.xlsx' -> Category: 'Procurement', Sub-category: 'Nuts & Bolts'
+    'Procurement - Electronic Equipment.xlsx' -> Category: 'Procurement', Sub-category: 'Electronic Equipment'
+    'Expenses.xlsx' -> Category: 'Expenses', Sub-category: inferred
+    """
+    cat = str(row_category).strip() if row_category and str(row_category).strip() else ""
+    subcat = str(row_subcategory).strip() if row_subcategory and str(row_subcategory).strip() else ""
+
+    # Clean filename without extension
+    clean_fn = re.sub(r"\.xlsx?$", "", filename, flags=re.I).strip()
+
+    # Check for "Category - Subcategory" or "Category – Subcategory" format in filename
+    for sep in [" - ", " – ", " — "]:
+        if sep in clean_fn:
+            parts = clean_fn.split(sep, 1)
+            if not cat:
+                cat = parts[0].strip()
+            if not subcat:
+                subcat = parts[1].strip()
+            break
+
+    # Check sheet name
+    if sheet_name and not is_dummy_sheet(sheet_name, []):
+        clean_sn = sheet_name.strip()
+        for sep in [" - ", " – ", " — "]:
+            if sep in clean_sn:
+                sp = clean_sn.split(sep, 1)
+                if not cat:
+                    cat = sp[0].strip()
+                if not subcat:
+                    subcat = sp[1].strip()
+                break
+        if not subcat and clean_sn.lower() not in ("sheet1", "sheet2", "sheet", "data", "master"):
+            subcat = clean_sn
+
+    # If still missing category, infer from product name & details
+    if not cat:
+        inferred = infer_category(item_name, details)
+        cat = inferred if inferred != "General Supplies" else "General"
+
+    if not subcat:
+        inferred = infer_category(item_name, details)
+        subcat = inferred if inferred != "General Supplies" else "General"
+
+    return cat, subcat
+
+
 def compute_row_hash(*fields) -> str:
     """Generate deterministic SHA256 hash for row deduplication."""
     content = "|".join(normalize_text(f) for f in fields)
@@ -188,13 +246,93 @@ def find_header_row(rows: List[List[Any]]) -> Tuple[int, Dict[str, int]]:
             if not cell:
                 continue
             c_str = normalize_text(cell)
-            if any(k in c_str for k in ["s no", "sno", "name", "component", "components", "qty", "quantity", "amount", "price", "unit price", "date", "status"]):
+            if any(k in c_str for k in ["s no", "sno", "name", "component", "components", "product", "item", "qty", "quantity", "amount", "price", "unit price", "date", "status", "category", "supplier", "vendor"]):
                 header_map[c_str] = col_idx
 
-        if len(header_map) >= 3:
+        if len(header_map) >= 2:
             return idx, header_map
 
     return 0, {}
+
+
+def resolve_column_indices(col_map: Dict[str, int]) -> Dict[str, Optional[int]]:
+    """Resolve column indices for any flexible variations in column headers."""
+    resolved = {
+        "id": None,
+        "name": None,
+        "category": None,
+        "sub_category": None,
+        "details": None,
+        "qty": None,
+        "amount": None,
+        "price": None,
+        "min_stock": None,
+        "market": None,
+        "date": None,
+        "status": None,
+        "vendor": None,
+        "approved_by": None,
+        "remarks": None,
+        "issued_by": None,
+        "url": None,
+    }
+
+    for col_name, idx in col_map.items():
+        cn = col_name.lower().strip()
+        
+        # Product ID
+        if any(k in cn for k in ["product id", "product_id", "prod id", "item id", "sku", "part number", "part no", "code"]) and not any(k in cn for k in ["name", "vendor", "supplier"]):
+            if resolved["id"] is None: resolved["id"] = idx
+        # Name
+        elif any(k in cn for k in ["product name", "component name", "item name", "product", "component", "components", "item", "items", "part name", "description"]) and not any(k in cn for k in ["vendor", "supplier", "approv"]):
+            if resolved["name"] is None: resolved["name"] = idx
+        # Sub-category
+        elif any(k in cn for k in ["sub category", "subcategory", "sub-category"]):
+            if resolved["sub_category"] is None: resolved["sub_category"] = idx
+        # Category
+        elif any(k in cn for k in ["category", "division", "section", "type"]):
+            if resolved["category"] is None: resolved["category"] = idx
+        # Min Stock
+        elif any(k in cn for k in ["minimum stock", "min stock", "min level", "threshold", "reorder level"]):
+            if resolved["min_stock"] is None: resolved["min_stock"] = idx
+        # Quantity
+        elif any(k in cn for k in ["qty", "quantity", "units", "count", "pieces", "pcs", "stock", "current stock", "balance"]):
+            if resolved["qty"] is None: resolved["qty"] = idx
+        # Amount
+        elif any(k in cn for k in ["amount", "total amount", "total cost", "total price", "expense", "total"]):
+            if resolved["amount"] is None: resolved["amount"] = idx
+        # Unit Price
+        elif any(k in cn for k in ["unit price", "price", "cost", "rate", "price per unit"]):
+            if resolved["price"] is None: resolved["price"] = idx
+        # Market
+        elif any(k in cn for k in ["market", "store"]):
+            if resolved["market"] is None: resolved["market"] = idx
+        # Date
+        elif any(k in cn for k in ["date", "order date", "purchase date", "invoice date"]):
+            if resolved["date"] is None: resolved["date"] = idx
+        # Status
+        elif any(k in cn for k in ["status", "order status", "state"]):
+            if resolved["status"] is None: resolved["status"] = idx
+        # Vendor / Supplier
+        elif any(k in cn for k in ["vendor", "supplier", "dealer", "distributor"]):
+            if resolved["vendor"] is None: resolved["vendor"] = idx
+        # Approved by
+        elif any(k in cn for k in ["approved by", "approver", "approved"]):
+            if resolved["approved_by"] is None: resolved["approved_by"] = idx
+        # Remarks
+        elif any(k in cn for k in ["remark", "remarks", "notes", "comment"]):
+            if resolved["remarks"] is None: resolved["remarks"] = idx
+        # Details
+        elif any(k in cn for k in ["detail", "details", "spec", "specs", "specification"]):
+            if resolved["details"] is None: resolved["details"] = idx
+        # Issued by
+        elif any(k in cn for k in ["issued by", "requested by", "requester"]):
+            if resolved["issued_by"] is None: resolved["issued_by"] = idx
+        # URL
+        elif "url" in cn or "link" in cn:
+            if resolved["url"] is None: resolved["url"] = idx
+
+    return resolved
 
 
 def read_excel_sheets(file_bytes: bytes) -> Dict[str, List[List[Any]]]:
@@ -270,48 +408,25 @@ def process_procurement_data(
             if not col_map:
                 continue
 
-            # Identify column positions
-            name_idx = None
-            details_idx = None
-            qty_idx = None
-            amount_idx = None
-            price_idx = None
-            market_idx = None
-            order_date_idx = None
-            order_status_idx = None
-            vendor_idx = None
-            approved_by_idx = None
-            remarks_idx = None
-            issued_by_idx = None
-            url_idx = None
-
-            for col_name, idx in col_map.items():
-                if "name" in col_name and "vendor" not in col_name:
-                    name_idx = idx
-                elif "detail" in col_name:
-                    details_idx = idx
-                elif "qty" in col_name or "quantity" in col_name:
-                    qty_idx = idx
-                elif "amount" in col_name:
-                    amount_idx = idx
-                elif "unit price" in col_name or "price" in col_name:
-                    price_idx = idx
-                elif "market" in col_name:
-                    market_idx = idx
-                elif "date" in col_name:
-                    order_date_idx = idx
-                elif "status" in col_name:
-                    order_status_idx = idx
-                elif "vendor" in col_name or "supplier" in col_name:
-                    vendor_idx = idx
-                elif "approved" in col_name:
-                    approved_by_idx = idx
-                elif "remark" in col_name:
-                    remarks_idx = idx
-                elif "issued" in col_name:
-                    issued_by_idx = idx
-                elif "url" in col_name:
-                    url_idx = idx
+            # Resolve all column positions flexibly
+            cols = resolve_column_indices(col_map)
+            name_idx = cols["name"]
+            id_idx = cols["id"]
+            cat_idx = cols["category"]
+            subcat_idx = cols["sub_category"]
+            details_idx = cols["details"]
+            qty_idx = cols["qty"]
+            amount_idx = cols["amount"]
+            price_idx = cols["price"]
+            min_stock_idx = cols["min_stock"]
+            market_idx = cols["market"]
+            order_date_idx = cols["date"]
+            order_status_idx = cols["status"]
+            vendor_idx = cols["vendor"]
+            approved_by_idx = cols["approved_by"]
+            remarks_idx = cols["remarks"]
+            issued_by_idx = cols["issued_by"]
+            url_idx = cols["url"]
 
             # Process data rows
             for r_idx in range(header_idx + 1, len(rows)):
@@ -329,10 +444,15 @@ def process_procurement_data(
                 if not norm_name:
                     continue
 
+                raw_id = str(row[id_idx]).strip() if id_idx is not None and id_idx < len(row) and row[id_idx] is not None else ""
+                row_cat = str(row[cat_idx]).strip() if cat_idx is not None and cat_idx < len(row) and row[cat_idx] is not None else None
+                row_subcat = str(row[subcat_idx]).strip() if subcat_idx is not None and subcat_idx < len(row) and row[subcat_idx] is not None else None
+
                 details = str(row[details_idx]).strip() if details_idx is not None and details_idx < len(row) and row[details_idx] is not None else ""
                 qty = parse_int_qty(row[qty_idx] if qty_idx is not None and qty_idx < len(row) else 1, default=1)
                 unit_price = parse_numeric(row[price_idx] if price_idx is not None and price_idx < len(row) else 0.0)
                 amount = parse_numeric(row[amount_idx] if amount_idx is not None and amount_idx < len(row) else (qty * unit_price))
+                min_stock_val = parse_int_qty(row[min_stock_idx] if min_stock_idx is not None and min_stock_idx < len(row) else max(3, int(qty * 0.5)), default=max(3, int(qty * 0.5)))
                 market = str(row[market_idx]).strip() if market_idx is not None and market_idx < len(row) and row[market_idx] is not None else "General"
                 
                 raw_date = row[order_date_idx] if order_date_idx is not None and order_date_idx < len(row) else None
@@ -345,10 +465,19 @@ def process_procurement_data(
                 issued_by = str(row[issued_by_idx]).strip() if issued_by_idx is not None and issued_by_idx < len(row) and row[issued_by_idx] is not None else ""
                 url = str(row[url_idx]).strip() if url_idx is not None and url_idx < len(row) and row[url_idx] is not None else ""
 
+                category, sub_category = extract_category_and_subcategory(
+                    filename=filename,
+                    sheet_name=sheet_name,
+                    item_name=clean_name,
+                    details=details or remarks,
+                    row_category=row_cat,
+                    row_subcategory=row_subcat,
+                )
+
                 # Business key deduplication hash (Idempotent across re-uploads)
                 row_hash = compute_row_hash(norm_name, qty, amount, date_str, vendor, order_status, remarks, sheet_name)
 
-                # Check if this exact row was already imported
+                # Check if this exact procurement row was already imported
                 existing_proc = procurement_col.find_one({"row_hash": row_hash})
                 if existing_proc:
                     duplicate_rows_cnt += 1
@@ -357,7 +486,6 @@ def process_procurement_data(
 
                 valid_records_cnt += 1
                 keywords, aliases = extract_keywords_and_aliases(clean_name, details, remarks)
-                category = infer_category(clean_name, details)
 
                 # Upsert into Master Inventory (products collection)
                 existing_prod = products_col.find_one({"normalized_name": norm_name})
@@ -381,6 +509,10 @@ def process_procurement_data(
                         "source_files": merged_sources,
                         "import_batch_ids": merged_batches,
                     }
+                    if category and (not existing_prod.get("category") or existing_prod.get("category") in ("General", "General Supplies")):
+                        update_fields["category"] = category
+                    if sub_category and not existing_prod.get("sub_category"):
+                        update_fields["sub_category"] = sub_category
                     if details and not existing_prod.get("details"):
                         update_fields["details"] = details
                     if vendor and (not existing_prod.get("supplier") or existing_prod.get("supplier") in ("Standard Vendor", "Corporate Vendor")):
@@ -413,12 +545,13 @@ def process_procurement_data(
                         "aliases": aliases,
                         "keywords": keywords,
                         "category": category,
+                        "sub_category": sub_category,
                         "current_stock": initial_stock,
-                        "min_stock": max(3, int(qty * 0.5)),
+                        "min_stock": min_stock_val,
                         "unit_price": unit_price if unit_price > 0 else (amount / qty if qty else 0),
                         "supplier": vendor,
                         "market": market,
-                        "status": "low_stock" if initial_stock <= 3 else "in_stock",
+                        "status": "low_stock" if initial_stock <= min_stock_val else "in_stock",
                         "total_expense": amount if order_status.lower() == "fulfilled" else 0,
                         "total_qty_purchased": qty if order_status.lower() == "fulfilled" else 0,
                         "total_qty_required": qty,
@@ -437,6 +570,8 @@ def process_procurement_data(
                     "product_id": prod_id,
                     "product_name": clean_name,
                     "normalized_name": norm_name,
+                    "category": category,
+                    "sub_category": sub_category,
                     "details": details,
                     "quantity": qty,
                     "unit_price": unit_price,
@@ -563,30 +698,20 @@ def process_expenses_data(
             if not col_map:
                 continue
 
-            # Identify column positions
-            comp_idx = None
-            qty_idx = None
-            unit_price_idx = None
-            date_idx = None
-            amount_idx = None
-            status_idx = None
-            remark_idx = None
-
-            for col_name, idx in col_map.items():
-                if any(k in col_name for k in ["component", "components", "name", "item"]):
-                    comp_idx = idx
-                elif "qty" in col_name or "quantity" in col_name:
-                    qty_idx = idx
-                elif "unit price" in col_name or "price" in col_name:
-                    unit_price_idx = idx
-                elif "date" in col_name:
-                    date_idx = idx
-                elif "amount" in col_name or "total" in col_name:
-                    amount_idx = idx
-                elif "status" in col_name:
-                    status_idx = idx
-                elif "remark" in col_name or "details" in col_name:
-                    remark_idx = idx
+            # Resolve all column positions flexibly
+            cols = resolve_column_indices(col_map)
+            comp_idx = cols["name"]
+            id_idx = cols["id"]
+            cat_idx = cols["category"]
+            subcat_idx = cols["sub_category"]
+            qty_idx = cols["qty"]
+            unit_price_idx = cols["price"]
+            date_idx = cols["date"]
+            amount_idx = cols["amount"]
+            min_stock_idx = cols["min_stock"]
+            status_idx = cols["status"]
+            remark_idx = cols["remarks"] if cols["remarks"] is not None else cols["details"]
+            vendor_idx = cols["vendor"]
 
             # Process expense rows
             for r_idx in range(header_idx + 1, len(rows)):
@@ -604,15 +729,29 @@ def process_expenses_data(
                 if not norm_name:
                     continue
 
+                row_cat = str(row[cat_idx]).strip() if cat_idx is not None and cat_idx < len(row) and row[cat_idx] is not None else None
+                row_subcat = str(row[subcat_idx]).strip() if subcat_idx is not None and subcat_idx < len(row) and row[subcat_idx] is not None else None
+                vendor = str(row[vendor_idx]).strip() if vendor_idx is not None and vendor_idx < len(row) and row[vendor_idx] is not None else "Corporate Vendor"
+
                 qty = parse_int_qty(row[qty_idx] if qty_idx is not None and qty_idx < len(row) else 1, default=1)
                 unit_price = parse_numeric(row[unit_price_idx] if unit_price_idx is not None and unit_price_idx < len(row) else 0.0)
                 amount = parse_numeric(row[amount_idx] if amount_idx is not None and amount_idx < len(row) else (qty * unit_price))
+                min_stock_val = parse_int_qty(row[min_stock_idx] if min_stock_idx is not None and min_stock_idx < len(row) else max(3, int(qty * 0.5)), default=max(3, int(qty * 0.5)))
                 
                 raw_date = row[date_idx] if date_idx is not None and date_idx < len(row) else None
                 dt_obj, date_str = parse_date_value(raw_date)
 
                 status = str(row[status_idx]).strip() if status_idx is not None and status_idx < len(row) and row[status_idx] is not None else "Paid"
                 remark = str(row[remark_idx]).strip() if remark_idx is not None and remark_idx < len(row) and row[remark_idx] is not None else ""
+
+                category, sub_category = extract_category_and_subcategory(
+                    filename=filename,
+                    sheet_name=sheet_name,
+                    item_name=clean_name,
+                    details=remark,
+                    row_category=row_cat,
+                    row_subcategory=row_subcat,
+                )
 
                 # Business key deduplication hash
                 row_hash = compute_row_hash(norm_name, qty, amount, unit_price, date_str, sheet_name, status, remark)
@@ -626,7 +765,6 @@ def process_expenses_data(
 
                 valid_records_cnt += 1
                 keywords, aliases = extract_keywords_and_aliases(clean_name, remark)
-                category = infer_category(clean_name, remark)
 
                 # Upsert into Master Inventory (products collection)
                 existing_prod = products_col.find_one({"normalized_name": norm_name})
@@ -649,6 +787,10 @@ def process_expenses_data(
                         "source_files": merged_sources,
                         "import_batch_ids": merged_batches,
                     }
+                    if category and (not existing_prod.get("category") or existing_prod.get("category") in ("General", "General Supplies")):
+                        update_fields["category"] = category
+                    if sub_category and not existing_prod.get("sub_category"):
+                        update_fields["sub_category"] = sub_category
                     if unit_price > 0 and (not existing_prod.get("unit_price") or existing_prod.get("unit_price") == 0.0):
                         update_fields["unit_price"] = unit_price
                     if remark and not existing_prod.get("details"):
@@ -676,12 +818,13 @@ def process_expenses_data(
                         "aliases": aliases,
                         "keywords": keywords,
                         "category": category,
+                        "sub_category": sub_category,
                         "current_stock": initial_stock,
-                        "min_stock": max(3, int(qty * 0.5)),
+                        "min_stock": min_stock_val,
                         "unit_price": unit_price if unit_price > 0 else (amount / qty if qty else 0),
-                        "supplier": "Corporate Vendor",
+                        "supplier": vendor,
                         "market": "Direct",
-                        "status": "low_stock" if initial_stock <= 3 else "in_stock",
+                        "status": "low_stock" if initial_stock <= min_stock_val else "in_stock",
                         "total_expense": amount,
                         "total_qty_purchased": qty,
                         "total_qty_required": 0,
@@ -700,6 +843,8 @@ def process_expenses_data(
                     "product_id": prod_id,
                     "product_name": clean_name,
                     "normalized_name": norm_name,
+                    "category": category,
+                    "sub_category": sub_category,
                     "quantity": qty,
                     "unit_price": unit_price,
                     "date": dt_obj,

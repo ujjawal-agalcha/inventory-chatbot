@@ -57,16 +57,18 @@ STOCK_GREEN_FILL = PatternFill(start_color="FFC6EFCE", end_color="FFC6EFCE", fil
 STOCK_GREEN_FONT = Font(name="Segoe UI", size=10.5, bold=True, color="FF006100")
 
 
-def get_stock_style(stock_value: int):
+def get_stock_style(stock_value: int, min_stock: int = 15):
     """
-    Return appropriate (PatternFill, Font) for stock level according to exact rules:
-    - Stock < 15  -> RED
-    - Stock = 15  -> YELLOW
-    - Stock > 15  -> GREEN
+    Return appropriate (PatternFill, Font) for stock level.
+    Uses the product's own min_stock threshold when available, falls back to 15.
+    - Stock < threshold  -> RED
+    - Stock = threshold  -> YELLOW
+    - Stock > threshold  -> GREEN
     """
-    if stock_value < 15:
+    threshold = min_stock if min_stock > 0 else 15
+    if stock_value < threshold:
         return STOCK_RED_FILL, STOCK_RED_FONT
-    elif stock_value == 15:
+    elif stock_value == threshold:
         return STOCK_YELLOW_FILL, STOCK_YELLOW_FONT
     else:
         return STOCK_GREEN_FILL, STOCK_GREEN_FONT
@@ -105,14 +107,20 @@ def generate_master_sheet_bytes() -> bytes:
     # Ensure grid lines are visible
     ws.views.sheetView[0].showGridLines = True
 
-    # 3. Define Headers
+    # 3. Define Headers according to normalized Master Sheet specification
     headers = [
-        "Component / Product Name",
+        "Product ID",
+        "Product Name",
         "Category",
-        "Price (₹)",
-        "Stock Left",
-        "Minimum Stock Level",
+        "Sub-category",
         "Supplier",
+        "Price (₹)",
+        "Purchased Qty",
+        "Stock Left",
+        "Minimum Stock",
+        "Total Expense (₹)",
+        "Pending Requirement",
+        "Source File(s)",
         "Status",
         "Last Updated",
     ]
@@ -133,12 +141,19 @@ def generate_master_sheet_bytes() -> bytes:
         default_row_fill = WHITE_FILL if is_even else ZEBRA_FILL
 
         # Extract product data from MongoDB dict
+        prod_id = str(product.get("id", ""))
         name = product.get("name", "Unknown Item")
         category = product.get("category", "General")
+        sub_category = product.get("sub_category", "") or "General"
+        supplier = product.get("supplier", "Standard Vendor")
         unit_price = float(product.get("unit_price", 0.0))
+        purchased_qty = int(product.get("total_qty_purchased", 0))
         stock_left = int(product.get("stock", product.get("current_stock", 0)))
         min_stock = int(product.get("min_stock", 0))
-        supplier = product.get("supplier", "Standard Vendor")
+        total_expense = float(product.get("total_expense", 0.0))
+        pending_req = int(product.get("pending_requirements", 0))
+        source_files_list = product.get("source_files", [])
+        source_files_str = ", ".join(source_files_list) if source_files_list else product.get("source_type", "permanent_inventory")
         status = format_status_label(product.get("status", "in_stock"))
         last_updated_raw = product.get("last_updated", "")
         
@@ -156,65 +171,110 @@ def generate_master_sheet_bytes() -> bytes:
         if not last_updated_str:
             last_updated_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
-        # Cell 1: Component Name
-        c1 = ws.cell(row=row_idx, column=1, value=name)
-        c1.font = FONT_BOLD
-        c1.alignment = ALIGN_LEFT
+        # Cell 1: Product ID
+        c1 = ws.cell(row=row_idx, column=1, value=prod_id)
+        c1.font = FONT_BASE
+        c1.alignment = ALIGN_CENTER
         c1.fill = default_row_fill
         c1.border = THIN_BORDER
 
-        # Cell 2: Category
-        c2 = ws.cell(row=row_idx, column=2, value=category)
-        c2.font = FONT_BASE
+        # Cell 2: Product Name
+        c2 = ws.cell(row=row_idx, column=2, value=name)
+        c2.font = FONT_BOLD
         c2.alignment = ALIGN_LEFT
         c2.fill = default_row_fill
         c2.border = THIN_BORDER
 
-        # Cell 3: Price
-        c3 = ws.cell(row=row_idx, column=3, value=unit_price)
+        # Cell 3: Category
+        c3 = ws.cell(row=row_idx, column=3, value=category)
         c3.font = FONT_BASE
-        c3.alignment = ALIGN_RIGHT
-        c3.number_format = "₹#,##0.00"
+        c3.alignment = ALIGN_LEFT
         c3.fill = default_row_fill
         c3.border = THIN_BORDER
 
-        # Cell 4: Stock Left (WITH CONDITIONAL COLOR FORMATTING)
-        stock_fill, stock_font = get_stock_style(stock_left)
-        c4 = ws.cell(row=row_idx, column=4, value=stock_left)
-        c4.font = stock_font
-        c4.fill = stock_fill
-        c4.alignment = ALIGN_CENTER
-        c4.number_format = "#,##0"
+        # Cell 4: Sub-category
+        c4 = ws.cell(row=row_idx, column=4, value=sub_category)
+        c4.font = FONT_BASE
+        c4.alignment = ALIGN_LEFT
+        c4.fill = default_row_fill
         c4.border = THIN_BORDER
 
-        # Cell 5: Minimum Stock Level
-        c5 = ws.cell(row=row_idx, column=5, value=min_stock)
+        # Cell 5: Supplier
+        c5 = ws.cell(row=row_idx, column=5, value=supplier)
         c5.font = FONT_BASE
-        c5.alignment = ALIGN_CENTER
-        c5.number_format = "#,##0"
+        c5.alignment = ALIGN_LEFT
         c5.fill = default_row_fill
         c5.border = THIN_BORDER
 
-        # Cell 6: Supplier
-        c6 = ws.cell(row=row_idx, column=6, value=supplier)
+        # Cell 6: Price
+        c6 = ws.cell(row=row_idx, column=6, value=unit_price)
         c6.font = FONT_BASE
-        c6.alignment = ALIGN_LEFT
+        c6.alignment = ALIGN_RIGHT
+        c6.number_format = "₹#,##0.00"
         c6.fill = default_row_fill
         c6.border = THIN_BORDER
 
-        # Cell 7: Status
-        c7 = ws.cell(row=row_idx, column=7, value=status)
+        # Cell 7: Purchased Qty
+        c7 = ws.cell(row=row_idx, column=7, value=purchased_qty)
         c7.font = FONT_BASE
         c7.alignment = ALIGN_CENTER
+        c7.number_format = "#,##0"
         c7.fill = default_row_fill
         c7.border = THIN_BORDER
 
-        # Cell 8: Last Updated
-        c8 = ws.cell(row=row_idx, column=8, value=last_updated_str)
-        c8.font = FONT_BASE
+        # Cell 8: Stock Left (WITH CONDITIONAL COLOR FORMATTING RESPECTING MIN STOCK)
+        stock_fill, stock_font = get_stock_style(stock_left, min_stock)
+        c8 = ws.cell(row=row_idx, column=8, value=stock_left)
+        c8.font = stock_font
+        c8.fill = stock_fill
         c8.alignment = ALIGN_CENTER
-        c8.fill = default_row_fill
+        c8.number_format = "#,##0"
         c8.border = THIN_BORDER
+
+        # Cell 9: Minimum Stock Level
+        c9 = ws.cell(row=row_idx, column=9, value=min_stock)
+        c9.font = FONT_BASE
+        c9.alignment = ALIGN_CENTER
+        c9.number_format = "#,##0"
+        c9.fill = default_row_fill
+        c9.border = THIN_BORDER
+
+        # Cell 10: Total Expense
+        c10 = ws.cell(row=row_idx, column=10, value=total_expense)
+        c10.font = FONT_BASE
+        c10.alignment = ALIGN_RIGHT
+        c10.number_format = "₹#,##0.00"
+        c10.fill = default_row_fill
+        c10.border = THIN_BORDER
+
+        # Cell 11: Pending Requirement
+        c11 = ws.cell(row=row_idx, column=11, value=pending_req)
+        c11.font = FONT_BASE
+        c11.alignment = ALIGN_CENTER
+        c11.number_format = "#,##0"
+        c11.fill = default_row_fill
+        c11.border = THIN_BORDER
+
+        # Cell 12: Source File(s)
+        c12 = ws.cell(row=row_idx, column=12, value=source_files_str)
+        c12.font = FONT_BASE
+        c12.alignment = ALIGN_LEFT
+        c12.fill = default_row_fill
+        c12.border = THIN_BORDER
+
+        # Cell 13: Status
+        c13 = ws.cell(row=row_idx, column=13, value=status)
+        c13.font = FONT_BASE
+        c13.alignment = ALIGN_CENTER
+        c13.fill = default_row_fill
+        c13.border = THIN_BORDER
+
+        # Cell 14: Last Updated
+        c14 = ws.cell(row=row_idx, column=14, value=last_updated_str)
+        c14.font = FONT_BASE
+        c14.alignment = ALIGN_CENTER
+        c14.fill = default_row_fill
+        c14.border = THIN_BORDER
 
     # 5. Freeze Header Row
     ws.freeze_panes = "A2"
@@ -233,17 +293,23 @@ def generate_master_sheet_bytes() -> bytes:
             if cell.number_format and "₹" in cell.number_format and isinstance(cell.value, (int, float)):
                 val_str = f"₹{cell.value:,.2f}"
             max_len = max(max_len, len(val_str))
-        ws.column_dimensions[col_letter].width = max(max_len + 4, 14)
+        ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
 
     # Specific tweaks for best layout
-    ws.column_dimensions["A"].width = max(ws.column_dimensions["A"].width, 28)
-    ws.column_dimensions["B"].width = max(ws.column_dimensions["B"].width, 18)
-    ws.column_dimensions["C"].width = max(ws.column_dimensions["C"].width, 15)
-    ws.column_dimensions["D"].width = max(ws.column_dimensions["D"].width, 14)
-    ws.column_dimensions["E"].width = max(ws.column_dimensions["E"].width, 20)
-    ws.column_dimensions["F"].width = max(ws.column_dimensions["F"].width, 26)
-    ws.column_dimensions["G"].width = max(ws.column_dimensions["G"].width, 16)
-    ws.column_dimensions["H"].width = max(ws.column_dimensions["H"].width, 20)
+    ws.column_dimensions["A"].width = max(ws.column_dimensions["A"].width, 24)
+    ws.column_dimensions["B"].width = max(ws.column_dimensions["B"].width, 28)
+    ws.column_dimensions["C"].width = max(ws.column_dimensions["C"].width, 18)
+    ws.column_dimensions["D"].width = max(ws.column_dimensions["D"].width, 18)
+    ws.column_dimensions["E"].width = max(ws.column_dimensions["E"].width, 22)
+    ws.column_dimensions["F"].width = max(ws.column_dimensions["F"].width, 15)
+    ws.column_dimensions["G"].width = max(ws.column_dimensions["G"].width, 15)
+    ws.column_dimensions["H"].width = max(ws.column_dimensions["H"].width, 14)
+    ws.column_dimensions["I"].width = max(ws.column_dimensions["I"].width, 16)
+    ws.column_dimensions["J"].width = max(ws.column_dimensions["J"].width, 18)
+    ws.column_dimensions["K"].width = max(ws.column_dimensions["K"].width, 20)
+    ws.column_dimensions["L"].width = max(ws.column_dimensions["L"].width, 24)
+    ws.column_dimensions["M"].width = max(ws.column_dimensions["M"].width, 16)
+    ws.column_dimensions["N"].width = max(ws.column_dimensions["N"].width, 20)
 
     # 8. Save to memory buffer
     buffer = io.BytesIO()

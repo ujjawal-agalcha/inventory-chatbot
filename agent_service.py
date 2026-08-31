@@ -46,13 +46,15 @@ def get_llm():
 # ============================================================
 
 SYSTEM_PROMPT = """
-You are an intelligent, helpful AI Assistant for an Inventory Management & Procurement Intelligence System.
+You are an intelligent, professional AI Assistant for an Inventory Management & Procurement Intelligence System.
 
 Guidelines:
 1. Greet users pleasantly and converse naturally for greetings ("Hi", "Hello", "How are you?"), identity questions ("Who are you?", "What can you do?"), or general queries.
 2. For inventory questions, always rely strictly on the provided real inventory facts and never hallucinate or invent product stock or suppliers.
 3. Help users understand components, microcontroller development boards, sensors, actuators, stock alerts, and procurement workflows.
 4. Format responses cleanly with bold labels, structured bullet points, and appropriate rupee currency (₹) symbols.
+5. NEVER mention databases, MongoDB, database queries, collection names, backend processing, internal function names, API details, or debugging information. Present all information as if you simply know it.
+6. Do NOT say things like "I checked the database", "searching MongoDB", "querying the collection", or "from the database". Just provide the answer naturally.
 """
 
 
@@ -70,9 +72,9 @@ def _normalize_text(text: str) -> str:
 
 def detect_product(message: str) -> Optional[dict]:
     """
-    Resolve a product from the user's natural-language message using MongoDB.
+    Resolve a product from the user's natural-language message.
     1. Direct match with get_product(message)
-    2. Substring & alias matching against all products in MongoDB
+    2. Substring & alias matching against all products with word-boundary awareness
     3. Token-based intelligent search
     """
     if not message:
@@ -82,13 +84,18 @@ def detect_product(message: str) -> Optional[dict]:
     if not norm:
         return None
 
+    # Ignore casual conversational words
+    ignore_words = {"hi", "hello", "hey", "thanks", "thank you", "bye", "ok", "okay", "yes", "no", "help", "who are you"}
+    if norm in ignore_words:
+        return None
+
     # 1. Direct lookup
     direct = get_product(message)
     if direct:
-        logger.info("Direct MongoDB product match: '%s'", direct["name"])
+        logger.info("Direct product match: '%s'", direct["name"])
         return direct
 
-    # 2. Check all products in MongoDB for alias or substring match
+    # 2. Check all products for alias or substring match with word-boundary awareness
     all_items = get_all_products()
     
     # Sort items by name length descending so specific names match before generic words
@@ -98,33 +105,34 @@ def detect_product(message: str) -> Optional[dict]:
         item_norm = item.get("normalized_name", "")
         item_name_lower = item.get("name", "").lower()
 
-        # Check if product name is inside user query
-        if item_norm and item_norm in norm:
+        # Check if product name is inside user query as a distinct phrase
+        if item_norm and len(item_norm) >= 3 and re.search(r'\b' + re.escape(item_norm) + r'\b', norm):
             logger.info("Found product by normalized name in query: '%s'", item["name"])
             return item
 
-        if item_name_lower and item_name_lower in message.lower():
+        if item_name_lower and len(item_name_lower) >= 3 and re.search(r'\b' + re.escape(item_name_lower) + r'\b', message.lower()):
             logger.info("Found product by name substring in query: '%s'", item["name"])
             return item
 
-        # Check aliases
+        # Check aliases with word boundary and min length
         for alias in item.get("aliases", []):
             alias_norm = _normalize_text(alias)
-            if alias_norm and alias_norm in norm:
-                logger.info("Found product by alias in query: '%s' -> '%s'", alias, item["name"])
-                return item
+            if alias_norm and len(alias_norm) >= 3 and alias_norm not in ignore_words:
+                if re.search(r'\b' + re.escape(alias_norm) + r'\b', norm):
+                    logger.info("Found product by alias in query: '%s' -> '%s'", alias, item["name"])
+                    return item
 
-    # 3. Intelligent search via MongoDB
+    # 3. Intelligent search via token intersection
     search_results = search_products(message, limit=3)
     if search_results:
         best = search_results[0]
-        # Verify confidence with significant tokens
         best_norm = best.get("normalized_name", "")
         best_tokens = set(best_norm.split())
         stop_words = {
             "how", "many", "much", "is", "are", "there", "in", "stock", "available",
             "do", "we", "have", "got", "the", "a", "an", "what", "which", "please",
-            "tell", "me", "about", "show", "give", "current", "units", "left", "who", "supplies"
+            "tell", "me", "about", "show", "give", "current", "units", "left", "who", "supplies",
+            "hi", "hello", "hey", "can", "you", "i", "need"
         }
         msg_sig_tokens = set(t for t in norm.split() if t not in stop_words and len(t) >= 2)
         if msg_sig_tokens and (best_tokens & msg_sig_tokens):
@@ -274,6 +282,45 @@ async def stream_agent_response(
     lower = message.lower().strip()
     logger.info("User prompt: '%s'", message)
 
+    clean_prompt = re.sub(r"[^\w\s]", "", lower).strip()
+
+    # --------------------------------------------------------
+    # 0. GREETINGS & CASUAL CONVERSATION
+    # --------------------------------------------------------
+    if clean_prompt in ("hi", "hello", "hey", "howdy", "greetings", "good morning", "good afternoon", "good evening", "hi there", "hello there", "hey there"):
+        logger.info("Handling Intent: greeting")
+        full_msg = "Hello! 👋 How can I help you with your inventory, stock levels, or procurement today?"
+        async for ev in _stream_text(full_msg):
+            yield ev
+        yield {
+            "type": "done",
+            "message": full_msg,
+            "data": [],
+            "data_type": "ai",
+        }
+        return
+
+    if clean_prompt in ("who are you", "what can you do", "what is your role", "help", "who r u", "what do you do"):
+        logger.info("Handling Intent: identity/help")
+        full_msg = (
+            "I am your **Inventory Intelligence Assistant**! 🤖\n\n"
+            "I can help you with:\n"
+            "• **Stock Checks:** Check live availability and minimum stock levels.\n"
+            "• **Stock Alerts:** Identify low-stock items and components needing reorders.\n"
+            "• **Suppliers & Vendors:** Look up suppliers, unit prices, and purchase history.\n"
+            "• **Procurement & Reorders:** Place automated reorder requests.\n"
+            "• **Analytics:** Review spending breakdown and component categories."
+        )
+        async for ev in _stream_text(full_msg):
+            yield ev
+        yield {
+            "type": "done",
+            "message": full_msg,
+            "data": [],
+            "data_type": "ai",
+        }
+        return
+
     # --------------------------------------------------------
     # 1. LOW STOCK INTENT
     # --------------------------------------------------------
@@ -282,7 +329,7 @@ async def stream_agent_response(
         low_items = get_low_stock_products()
 
         if not low_items:
-            full_msg = "✅ There are currently **no low-stock items** in the database. All inventory levels are healthy!"
+            full_msg = "✅ Great news! There are currently **no low-stock items**. All inventory levels are healthy!"
             async for ev in _stream_text(full_msg):
                 yield ev
             yield {
@@ -323,7 +370,7 @@ async def stream_agent_response(
         logger.info("Handling Intent: all_inventory")
         items = get_all_products()
 
-        full_msg = f"📦 Showing all **{len(items)} items** registered in the MongoDB Master Inventory dataset."
+        full_msg = f"📦 Here are all **{len(items)} items** currently in inventory."
         async for ev in _stream_text(full_msg):
             yield ev
 
@@ -351,14 +398,14 @@ async def stream_agent_response(
             if (p.get("total_qty_required", 0) > 0 or p.get("pending_requirements", 0) > 0)
         ]
         if not req_prods:
-            full_msg = "📋 Currently, there are **no active pending requirements** in the MongoDB inventory records."
+            full_msg = "📋 Currently, there are **no active pending requirements** on record."
         else:
             lines = [
                 f"- **{p['name']}**: Required: **{p.get('total_qty_required', 0)} units** | Pending: {p.get('pending_requirements', 0)} units | Supplier: **{p.get('supplier')}**"
                 for p in req_prods
             ]
             full_msg = (
-                f"📋 Found **{len(req_prods)} component(s)** with active requirements in MongoDB:\n\n"
+                f"📋 Found **{len(req_prods)} component(s)** with active requirements:\n\n"
                 + "\n".join(lines)
             )
         async for ev in _stream_text(full_msg):
@@ -512,10 +559,10 @@ async def stream_agent_response(
     # 5. INVENTORY QUESTION BUT PRODUCT NOT FOUND
     # --------------------------------------------------------
     if _has_keyword(lower, STOCK_KEYWORDS + SUPPLIER_KEYWORDS + EXPENSE_KEYWORDS + REORDER_KEYWORDS):
-        logger.info("Inventory intent detected but no matching product found in MongoDB.")
+        logger.info("Inventory intent detected but no matching product found.")
         full_msg = (
-            "I searched the live MongoDB database but could not find a matching product or component "
-            "for your query. Please verify the item name or upload the relevant Excel workbook."
+            "I couldn't find a matching product or component for your query. "
+            "Please check the item name and try again, or upload the relevant Excel file to add new inventory data."
         )
         async for ev in _stream_text(full_msg):
             yield ev
@@ -613,6 +660,6 @@ async def ask_agent(
         "message": full_text,
         "answer": full_text,
         "data": final_data,
-        "sources": ["live_mongodb_inventory", "knowledge_base"],
+        "sources": ["master_inventory", "knowledge_base"],
         "mode": "agent",
     }

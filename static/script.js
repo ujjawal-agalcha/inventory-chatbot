@@ -42,7 +42,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 // ============================================================
 
 function switchMainTab(tabId) {
-    const views = ["chat", "analytics", "upload"];
+    const views = ["chat", "inventory", "analytics", "upload"];
     views.forEach(v => {
         const viewEl = document.getElementById(`view-${v}`);
         const btnEl = document.getElementById(`tab-btn-${v}`);
@@ -58,15 +58,40 @@ function switchMainTab(tabId) {
 
     if (tabId === "chat") {
         if (pageTitle) pageTitle.textContent = "Inventory Intelligence";
-        if (pageSubtitle) pageSubtitle.textContent = "Real-time MongoDB stock monitoring, Excel ingestion & AI assistant";
+        if (pageSubtitle) pageSubtitle.textContent = "Real-time stock assistance, procurement intelligence & AI assistant";
+    } else if (tabId === "inventory") {
+        if (pageTitle) pageTitle.textContent = "Inventory Management";
+        if (pageSubtitle) pageSubtitle.textContent = "Real-time inventory records. Click Edit to update stock or thresholds.";
+        loadInventoryTabTable();
     } else if (tabId === "analytics") {
         if (pageTitle) pageTitle.textContent = "Real-Time Analytical Dashboard";
-        if (pageSubtitle) pageSubtitle.textContent = "Interactive spending trends, category breakdown & master inventory table";
+        if (pageSubtitle) pageSubtitle.textContent = "Interactive spending trends, category breakdown & master inventory";
         refreshDashboardData();
     } else if (tabId === "upload") {
         if (pageTitle) pageTitle.textContent = "Excel Ingestion & Integration Hub";
-        if (pageSubtitle) pageSubtitle.textContent = "Upload procurement & monthly expense workbooks with duplicate prevention";
+        if (pageSubtitle) pageSubtitle.textContent = "Upload workbooks with duplicate prevention & auto categorization";
         loadImportHistory();
+    }
+}
+
+// ============================================================
+// STOCK CONDITIONAL COLOR BADGE HELPER
+// Rules:
+// Stock < min_stock (or 15)  -> RED
+// Stock = min_stock (or 15)  -> YELLOW
+// Stock > min_stock (or 15)  -> GREEN
+// ============================================================
+
+function getStockBadgeHtml(stock, minStock) {
+    const threshold = (minStock !== undefined && minStock !== null && minStock > 0) ? minStock : 15;
+    const stockVal = Number(stock || 0);
+
+    if (stockVal < threshold) {
+        return `<span class="stock-badge-red" title="Low stock! Below minimum threshold (${threshold})">⚠️ ${stockVal} units</span>`;
+    } else if (stockVal === threshold) {
+        return `<span class="stock-badge-yellow" title="Stock at exact threshold (${threshold})">⚠️ ${stockVal} units</span>`;
+    } else {
+        return `<span class="stock-badge-green" title="Healthy stock (> ${threshold})">✓ ${stockVal} units</span>`;
     }
 }
 
@@ -169,6 +194,396 @@ async function loadCategories() {
         }
     } catch (e) {
         console.warn("Could not load dynamic categories:", e);
+    }
+}
+
+// ============================================================
+// DEDICATED INVENTORY TAB (VIEW & EDIT)
+// ============================================================
+
+let inventoryTabData = [];
+
+async function loadInventoryTabTable() {
+    const tbody = document.getElementById("inventory-tab-body");
+    const catSelect = document.getElementById("inventory-tab-cat-filter");
+    if (!tbody) return;
+
+    try {
+        const res = await fetch("/api/inventory");
+        if (res.ok) {
+            inventoryTabData = await res.json();
+            masterInventory = inventoryTabData;
+
+            // Populate category filter dropdown
+            if (catSelect) {
+                const uniqueCats = Array.from(new Set(inventoryTabData.map(i => i.category).filter(Boolean)));
+                const currentVal = catSelect.value;
+                catSelect.innerHTML = `<option value="">All Categories</option>` + uniqueCats.map(c =>
+                    `<option value="${escapeHtml(c)}" ${c === currentVal ? 'selected' : ''}>${escapeHtml(c)}</option>`
+                ).join("");
+            }
+
+            filterInventoryTabTable();
+        }
+    } catch (e) {
+        console.error("Error loading inventory tab table:", e);
+        tbody.innerHTML = `<tr><td colspan="10" class="text-center">Error loading inventory. Please refresh.</td></tr>`;
+    }
+}
+
+function filterInventoryTabTable() {
+    const tbody = document.getElementById("inventory-tab-body");
+    if (!tbody) return;
+
+    const query = (document.getElementById("inventory-tab-search")?.value || "").toLowerCase().trim();
+    const selectedCat = document.getElementById("inventory-tab-cat-filter")?.value || "";
+
+    const filtered = inventoryTabData.filter(item => {
+        const matchesQuery = !query ||
+            (item.name && item.name.toLowerCase().includes(query)) ||
+            (item.category && item.category.toLowerCase().includes(query)) ||
+            (item.sub_category && item.sub_category.toLowerCase().includes(query)) ||
+            (item.supplier && item.supplier.toLowerCase().includes(query)) ||
+            (item.details && item.details.toLowerCase().includes(query));
+
+        const matchesCat = !selectedCat || (item.category === selectedCat);
+        return matchesQuery && matchesCat;
+    });
+
+    if (filtered.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="10" class="text-center">No matching inventory items found.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = filtered.map(item => {
+        const stockBadge = getStockBadgeHtml(item.stock, item.min_stock);
+        const lastUpdated = item.last_updated ? new Date(item.last_updated).toLocaleString() : "-";
+
+        return `
+            <tr>
+                <td>
+                    <strong>${escapeHtml(item.name)}</strong>
+                    ${item.details ? `<br><small class="text-muted">${escapeHtml(item.details)}</small>` : ''}
+                </td>
+                <td><span class="badge-tag">${escapeHtml(item.category)}</span></td>
+                <td><span class="badge-tag" style="background:#f1f5f9; color:#475569;">${escapeHtml(item.sub_category || '-')}</span></td>
+                <td>₹${Number(item.unit_price).toFixed(2)}</td>
+                <td>${stockBadge}</td>
+                <td>${item.min_stock} units</td>
+                <td>${escapeHtml(item.supplier || 'Standard Vendor')}</td>
+                <td>
+                    <span class="status-badge ${item.is_low_stock ? 'low' : 'ok'}">
+                        ${item.is_low_stock ? '⚠️ Low Stock' : '✓ In Stock'}
+                    </span>
+                </td>
+                <td><small>${lastUpdated}</small></td>
+                <td>
+                    <div style="display: flex; gap: 6px;">
+                        <button class="edit-icon-btn" onclick="openEditModal('${item.id}')" title="Edit this product">✏️ Edit</button>
+                        <button class="mini-btn" onclick="quickReorderPrompt('${escapeHtml(item.name)}')">📦</button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join("");
+}
+
+// ============================================================
+// INVENTORY PRODUCT EDIT MODAL
+// ============================================================
+
+function openEditModal(productId) {
+    const item = masterInventory.find(i => String(i.id) === String(productId)) || inventoryTabData.find(i => String(i.id) === String(productId));
+    if (!item) {
+        alert("Product not found.");
+        return;
+    }
+
+    document.getElementById("edit-product-id").value = item.id;
+    document.getElementById("edit-name").value = item.name || "";
+    document.getElementById("edit-category").value = item.category || "";
+    document.getElementById("edit-subcategory").value = item.sub_category || "";
+    document.getElementById("edit-stock").value = item.stock !== undefined ? item.stock : (item.current_stock || 0);
+    document.getElementById("edit-min-stock").value = item.min_stock !== undefined ? item.min_stock : 15;
+    document.getElementById("edit-price").value = item.unit_price || 0;
+    document.getElementById("edit-supplier").value = item.supplier || "";
+    document.getElementById("edit-market").value = item.market || "Direct";
+    document.getElementById("edit-details").value = item.details || "";
+
+    const feedback = document.getElementById("edit-feedback");
+    if (feedback) feedback.style.display = "none";
+
+    const modal = document.getElementById("inventory-edit-modal");
+    if (modal) modal.classList.add("active");
+}
+
+function closeEditModal() {
+    const modal = document.getElementById("inventory-edit-modal");
+    if (modal) modal.classList.remove("active");
+}
+
+async function handleProductEditSubmit(event) {
+    event.preventDefault();
+    const productId = document.getElementById("edit-product-id").value;
+    if (!productId) return;
+
+    const btn = document.getElementById("btn-save-edit");
+    const feedback = document.getElementById("edit-feedback");
+    const originalText = btn ? btn.textContent : "Save";
+
+    const payload = {
+        name: document.getElementById("edit-name").value.trim(),
+        category: document.getElementById("edit-category").value.trim(),
+        sub_category: document.getElementById("edit-subcategory").value.trim(),
+        current_stock: parseInt(document.getElementById("edit-stock").value, 10),
+        min_stock: parseInt(document.getElementById("edit-min-stock").value, 10),
+        unit_price: parseFloat(document.getElementById("edit-price").value),
+        supplier: document.getElementById("edit-supplier").value.trim(),
+        market: document.getElementById("edit-market").value.trim(),
+        details: document.getElementById("edit-details").value.trim(),
+    };
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Saving...";
+    }
+
+    try {
+        const token = getToken();
+        const res = await fetch(`/api/inventory/${productId}`, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                ...(token ? { "Authorization": `Bearer ${token}` } : {})
+            },
+            body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+            closeEditModal();
+            // Refresh stats, categories, tables
+            await loadStats();
+            await loadCategories();
+            await loadInventoryTabTable();
+            await renderMasterTable();
+        } else {
+            if (feedback) {
+                feedback.style.display = "block";
+                feedback.className = "upload-feedback error";
+                feedback.textContent = `❌ Update failed: ${data.detail || "Unknown error"}`;
+            }
+        }
+    } catch (e) {
+        console.error("Error saving product edit:", e);
+        if (feedback) {
+            feedback.style.display = "block";
+            feedback.className = "upload-feedback error";
+            feedback.textContent = `❌ Network or server error: ${e.message}`;
+        }
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalText;
+        }
+    }
+}
+
+// ============================================================
+// CLICKABLE KPI DRILL-DOWN MODAL
+// ============================================================
+
+async function openKPIModal(kpiType) {
+    const modal = document.getElementById("kpi-modal");
+    const titleEl = document.getElementById("kpi-modal-title");
+    const subtitleEl = document.getElementById("kpi-modal-subtitle");
+    const bodyEl = document.getElementById("kpi-modal-body");
+
+    if (!modal || !bodyEl) return;
+
+    modal.classList.add("active");
+    bodyEl.innerHTML = `<div class="loading-state">Loading metric details...</div>`;
+
+    try {
+        if (kpiType === "total") {
+            titleEl.textContent = "📦 Total Registered Products";
+            subtitleEl.textContent = "All products currently managed in the inventory";
+            const res = await fetch("/api/inventory");
+            const prods = await res.json();
+            bodyEl.innerHTML = `
+                <div class="table-responsive">
+                    <table class="styled-table compact">
+                        <thead>
+                            <tr>
+                                <th>Product</th>
+                                <th>Category</th>
+                                <th>Sub-Category</th>
+                                <th>Stock</th>
+                                <th>Min Level</th>
+                                <th>Price</th>
+                                <th>Supplier</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${prods.map(p => `
+                                <tr>
+                                    <td><strong>${escapeHtml(p.name)}</strong></td>
+                                    <td>${escapeHtml(p.category)}</td>
+                                    <td>${escapeHtml(p.sub_category || '-')}</td>
+                                    <td>${getStockBadgeHtml(p.stock, p.min_stock)}</td>
+                                    <td>${p.min_stock}</td>
+                                    <td>₹${Number(p.unit_price).toFixed(2)}</td>
+                                    <td>${escapeHtml(p.supplier)}</td>
+                                    <td><span class="status-badge ${p.is_low_stock ? 'low' : 'ok'}">${p.is_low_stock ? 'Low Stock' : 'In Stock'}</span></td>
+                                </tr>
+                            `).join("")}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        } else if (kpiType === "low_stock") {
+            titleEl.textContent = "⚠️ Low Stock Alert Items";
+            subtitleEl.textContent = "Components requiring immediate procurement attention";
+            const res = await fetch("/api/inventory/low-stock");
+            const lowProds = await res.json();
+
+            if (lowProds.length === 0) {
+                bodyEl.innerHTML = `<div class="text-center" style="padding: 24px;">✅ Great news! All inventory items have healthy stock levels.</div>`;
+                return;
+            }
+
+            bodyEl.innerHTML = `
+                <div class="table-responsive">
+                    <table class="styled-table compact">
+                        <thead>
+                            <tr>
+                                <th>Product</th>
+                                <th>Category</th>
+                                <th>Current Stock</th>
+                                <th>Min Threshold</th>
+                                <th>Deficit</th>
+                                <th>Supplier</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${lowProds.map(p => {
+                                const deficit = Math.max(0, p.min_stock - p.stock);
+                                return `
+                                <tr>
+                                    <td><strong>${escapeHtml(p.name)}</strong></td>
+                                    <td>${escapeHtml(p.category)}</td>
+                                    <td><span class="stock-badge-red">⚠️ ${p.stock} units</span></td>
+                                    <td>${p.min_stock} units</td>
+                                    <td><strong class="text-danger">-${deficit} units</strong></td>
+                                    <td>${escapeHtml(p.supplier)}</td>
+                                    <td>
+                                        <button class="mini-btn primary" onclick="closeKPIModal(); quickReorderPrompt('${escapeHtml(p.name)}')">📦 Reorder</button>
+                                    </td>
+                                </tr>
+                                `;
+                            }).join("")}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        } else if (kpiType === "units") {
+            titleEl.textContent = "🚚 Total Inventory Stock Distribution";
+            subtitleEl.textContent = "Live unit quantities sorted by availability";
+            const res = await fetch("/api/inventory");
+            const prods = await res.json();
+            prods.sort((a, b) => (b.stock || 0) - (a.stock || 0));
+
+            bodyEl.innerHTML = `
+                <div class="table-responsive">
+                    <table class="styled-table compact">
+                        <thead>
+                            <tr>
+                                <th>Product</th>
+                                <th>Category</th>
+                                <th>Current Stock</th>
+                                <th>Unit Price</th>
+                                <th>Total Value</th>
+                                <th>Supplier</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${prods.map(p => `
+                                <tr>
+                                    <td><strong>${escapeHtml(p.name)}</strong></td>
+                                    <td>${escapeHtml(p.category)}</td>
+                                    <td>${getStockBadgeHtml(p.stock, p.min_stock)}</td>
+                                    <td>₹${Number(p.unit_price).toFixed(2)}</td>
+                                    <td><strong>₹${Number((p.stock || 0) * (p.unit_price || 0)).toLocaleString()}</strong></td>
+                                    <td>${escapeHtml(p.supplier)}</td>
+                                </tr>
+                            `).join("")}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        } else if (kpiType === "expenses") {
+            titleEl.textContent = "💰 Procurement & Spending Summary";
+            subtitleEl.textContent = "Breakdown of cumulative expenses";
+            const res = await fetch("/api/dashboard/analytics");
+            const data = await res.json();
+            const topExp = data.top_expenses || [];
+
+            bodyEl.innerHTML = `
+                <div class="table-responsive">
+                    <table class="styled-table compact">
+                        <thead>
+                            <tr>
+                                <th>Product</th>
+                                <th>Category</th>
+                                <th>Total Spend</th>
+                                <th>Units Purchased</th>
+                                <th>Supplier</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${topExp.map(p => `
+                                <tr>
+                                    <td><strong>${escapeHtml(p.name)}</strong></td>
+                                    <td>${escapeHtml(p.category || '-')}</td>
+                                    <td><strong>₹${Number(p.total_expense || 0).toLocaleString()}</strong></td>
+                                    <td>${p.total_qty_purchased || p.stock || 0}</td>
+                                    <td>${escapeHtml(p.supplier || 'Standard Vendor')}</td>
+                                </tr>
+                            `).join("")}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+    } catch (e) {
+        console.error("Error opening KPI modal:", e);
+        bodyEl.innerHTML = `<div class="text-danger" style="padding: 24px;">Failed to load metric details.</div>`;
+    }
+}
+
+function closeKPIModal() {
+    const modal = document.getElementById("kpi-modal");
+    if (modal) modal.classList.remove("active");
+}
+
+// ============================================================
+// ON-DEMAND CHARTS TOGGLE
+// ============================================================
+
+function toggleAllCharts() {
+    const container = document.getElementById("analytics-charts-container");
+    const btn = document.getElementById("btn-toggle-all-charts");
+    if (!container) return;
+
+    if (container.style.display === "none") {
+        container.style.display = "grid";
+        if (btn) btn.classList.add("active");
+    } else {
+        container.style.display = "none";
+        if (btn) btn.classList.remove("active");
     }
 }
 
@@ -335,6 +750,7 @@ function filterMasterTable() {
         const matchesQuery = !query ||
             (item.name && item.name.toLowerCase().includes(query)) ||
             (item.category && item.category.toLowerCase().includes(query)) ||
+            (item.sub_category && item.sub_category.toLowerCase().includes(query)) ||
             (item.supplier && item.supplier.toLowerCase().includes(query)) ||
             (item.details && item.details.toLowerCase().includes(query));
 
@@ -343,36 +759,44 @@ function filterMasterTable() {
     });
 
     if (filtered.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="9" class="text-center">No inventory records found.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="10" class="text-center">No inventory records found.</td></tr>`;
         return;
     }
 
-    tbody.innerHTML = filtered.map(item => `
+    tbody.innerHTML = filtered.map(item => {
+        const stockBadge = getStockBadgeHtml(item.stock, item.min_stock);
+
+        return `
         <tr>
             <td>
                 <strong>${escapeHtml(item.name)}</strong>
                 ${item.details ? `<br><small class="text-muted">${escapeHtml(item.details)}</small>` : ''}
             </td>
             <td><span class="badge-tag">${escapeHtml(item.category)}</span></td>
-            <td><strong>${item.stock}</strong> units</td>
+            <td><span class="badge-tag" style="background:#f1f5f9; color:#475569;">${escapeHtml(item.sub_category || '-')}</span></td>
+            <td>${stockBadge}</td>
             <td>${item.min_stock} units</td>
             <td>₹${Number(item.unit_price).toFixed(2)}</td>
             <td>₹${Number(item.total_expense || 0).toLocaleString()}</td>
-            <td>${escapeHtml(item.supplier || 'N/A')}</td>
+            <td>${escapeHtml(item.supplier || 'Standard Vendor')}</td>
             <td>
                 <span class="status-badge ${item.is_low_stock ? 'low' : 'ok'}">
                     ${item.is_low_stock ? '⚠️ Low Stock' : '✓ In Stock'}
                 </span>
             </td>
             <td>
-                <button class="mini-btn primary" onclick="quickReorderPrompt('${escapeHtml(item.name)}')">Reorder</button>
+                <div style="display: flex; gap: 6px;">
+                    <button class="edit-icon-btn" onclick="openEditModal('${item.id}')" title="Edit this product">✏️</button>
+                    <button class="mini-btn primary" onclick="quickReorderPrompt('${escapeHtml(item.name)}')">Reorder</button>
+                </div>
             </td>
         </tr>
-    `).join("");
+    `;
+    }).join("");
 }
 
 // ============================================================
-// MASTER SHEET EXCEL DOWNLOAD (MONGODB SOURCE OF TRUTH)
+// MASTER SHEET EXCEL DOWNLOAD (CONSOLIDATED SOURCE OF TRUTH)
 // ============================================================
 
 async function downloadMasterSheet() {
@@ -549,7 +973,7 @@ async function uploadExcel(type) {
 
     if (btn) {
         btn.disabled = true;
-        btn.textContent = "Processing & Ingesting into MongoDB...";
+        btn.textContent = "Processing & Ingesting Data...";
     }
 
     if (feedback) {

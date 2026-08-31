@@ -105,6 +105,7 @@ def init_mongo_indexes():
         # Unique index on normalized_name to prevent duplicate products
         products.create_index("normalized_name", unique=True)
         products.create_index("category")
+        products.create_index("sub_category")
         products.create_index("supplier")
         products.create_index("status")
         

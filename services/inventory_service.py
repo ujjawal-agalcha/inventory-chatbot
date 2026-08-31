@@ -1,309 +1,211 @@
-from models import InventoryItem, ReorderRequest
-from sqlalchemy import or_
+import logging
+from datetime import datetime
+from typing import List, Dict, Any, Optional
+# pyrefly: ignore [missing-import]
+from bson import ObjectId
 
+from database.repositories.product_repository import (
+    get_all_products_from_mongo,
+    get_product_by_name_or_norm,
+    get_product_by_id,
+    search_products_in_mongo,
+    get_low_stock_products_from_mongo,
+    get_out_of_stock_products_from_mongo,
+    update_product_stock_in_mongo,
+    update_product_fields_in_mongo,
+    count_products_in_mongo,
+)
+from database.mongodb import (
+    get_products_collection,
+    get_procurement_collection,
+    get_expenses_collection,
+)
+from database.repositories.inventory_repository import (
+    get_all_sqlite_inventory,
+    get_sqlite_component,
+    search_sqlite_inventory,
+    get_sqlite_low_stock_items,
+    update_sqlite_stock,
+    create_sqlite_reorder_request,
+    get_sqlite_reorder_requests,
+)
+
+logger = logging.getLogger("services.inventory")
+
+
+def ensure_permanent_electronic_inventory():
+    """
+    Ensure the 39 legitimate electronic equipment products are present in MongoDB
+    marked with source_type='permanent_inventory'.
+    """
+    from scripts.seed_database import seed_mongo_inventory
+    return seed_mongo_inventory()
+
+
+def get_all_products(
+    category: Optional[str] = None,
+    supplier: Optional[str] = None,
+    status: Optional[str] = None,
+) -> List[dict]:
+    """Retrieve all products from MongoDB with optional filters."""
+    if count_products_in_mongo() == 0:
+        ensure_permanent_electronic_inventory()
+    return get_all_products_from_mongo(category=category, supplier=supplier, status=status)
+
+
+def get_product(name_or_id: str) -> Optional[dict]:
+    """Intelligently resolve a product from MongoDB."""
+    if count_products_in_mongo() == 0:
+        ensure_permanent_electronic_inventory()
+    prod = get_product_by_id(name_or_id)
+    if prod:
+        return prod
+    return get_product_by_name_or_norm(name_or_id)
+
+
+def search_products(query_str: str, limit: int = 20) -> List[dict]:
+    """Search products in MongoDB."""
+    if count_products_in_mongo() == 0:
+        ensure_permanent_electronic_inventory()
+    return search_products_in_mongo(query_str, limit)
+
+
+def get_low_stock_products() -> List[dict]:
+    """Retrieve all products where current_stock <= min_stock."""
+    if count_products_in_mongo() == 0:
+        ensure_permanent_electronic_inventory()
+    return get_low_stock_products_from_mongo()
+
+
+def get_out_of_stock_products() -> List[dict]:
+    """Retrieve all products where current_stock == 0."""
+    return get_out_of_stock_products_from_mongo()
+
+
+def update_product_stock(product_id_or_name: str, new_stock: int) -> Optional[dict]:
+    """Update stock for a product in MongoDB."""
+    return update_product_stock_in_mongo(product_id_or_name, new_stock)
+
+
+def update_product(product_id: str, update_fields: dict) -> Optional[dict]:
+    """Update editable fields for a product in MongoDB."""
+    return update_product_fields_in_mongo(product_id, update_fields)
+
+
+def get_suppliers_summary() -> List[dict]:
+    """Retrieve supplier distribution summary."""
+    prods = get_all_products()
+    supplier_map = {}
+    for p in prods:
+        sup = p.get("supplier", "Unknown")
+        if sup not in supplier_map:
+            supplier_map[sup] = {
+                "supplier": sup,
+                "product_count": 0,
+                "total_units": 0,
+                "total_expense": 0.0,
+                "products": [],
+            }
+        supplier_map[sup]["product_count"] += 1
+        supplier_map[sup]["total_units"] += p.get("current_stock", 0)
+        supplier_map[sup]["total_expense"] += p.get("total_expense", 0.0)
+        supplier_map[sup]["products"].append(p.get("name", ""))
+
+    return list(supplier_map.values())
+
+
+def create_reorder_request(
+    item_identifier: str,
+    quantity: int,
+    vendor: Optional[str] = None,
+    remarks: Optional[str] = None,
+) -> Optional[dict]:
+    """Create a new procurement / reorder request record in MongoDB."""
+    if quantity <= 0:
+        raise ValueError("Quantity must be greater than zero.")
+
+    prod = get_product(item_identifier)
+    if not prod:
+        return None
+
+    proc_col = get_procurement_collection()
+    products_col = get_products_collection()
+
+    unit_price = prod.get("unit_price", 0.0)
+    amount = quantity * unit_price
+    supplier = vendor or prod.get("supplier", "Standard Vendor")
+    date_now = datetime.utcnow()
+    date_str = date_now.strftime("%Y-%m-%d")
+
+    row_hash = f"reorder_{prod['id']}_{quantity}_{date_now.timestamp()}"
+
+    record = {
+        "product_id": ObjectId(prod["id"]) if ObjectId.is_valid(prod["id"]) else prod["id"],
+        "product_name": prod["name"],
+        "normalized_name": prod["normalized_name"],
+        "details": prod.get("details", ""),
+        "quantity": quantity,
+        "unit_price": unit_price,
+        "amount": amount,
+        "market": prod.get("market", "Direct"),
+        "order_date": date_now,
+        "order_date_str": date_str,
+        "order_status": "Pending",
+        "vendor_name": supplier,
+        "approved_by": "System Reorder",
+        "remarks": remarks or "Automated reorder from Chatbot",
+        "requirement_issued_by": "AI Assistant",
+        "url": "",
+        "source_type": "manual_reorder",
+        "source_file": "Chatbot Reorder",
+        "source_sheet": "Live System",
+        "import_id": None,
+        "import_batch_id": None,
+        "row_hash": row_hash,
+        "created_at": date_now,
+    }
+
+    res = proc_col.insert_one(record)
+    record["_id"] = res.inserted_id
+
+    products_col.update_one(
+        {"normalized_name": prod["normalized_name"]},
+        {"$inc": {"pending_requirements": quantity, "total_qty_required": quantity}}
+    )
+
+    from database.repositories.import_repository import _procurement_doc_to_dict
+    return _procurement_doc_to_dict(record)
+
+
+def get_all_reorders(limit: int = 50) -> List[dict]:
+    """Retrieve all reorder/procurement records."""
+    proc_col = get_procurement_collection()
+    docs = proc_col.find({}).sort("created_at", -1).limit(limit)
+    from database.repositories.import_repository import _procurement_doc_to_dict
+    return [_procurement_doc_to_dict(d) for d in docs]
+
+
+# ============================================================
+# SQLITE BACKWARDS COMPATIBILITY WRAPPERS
+# ============================================================
 
 def get_all_inventory(db):
-    return (
-        db.query(InventoryItem)
-        .order_by(InventoryItem.name)
-        .all()
-    )
-
+    return get_all_sqlite_inventory(db)
 
 def get_component(db, name):
-    """
-    Resolve an inventory item by:
-    1. Exact name
-    2. Case-insensitive exact name
-    3. Substring
-    4. Individual meaningful words
-    """
-
-    if not name:
-        return None
-
-    name = name.strip()
-
-    if not name:
-        return None
-
-    # ---------------------------------------------------------
-    # 1. Exact match
-    # ---------------------------------------------------------
-
-    item = (
-        db.query(InventoryItem)
-        .filter(InventoryItem.name == name)
-        .first()
-    )
-
-    if item:
-        return item
-
-    # ---------------------------------------------------------
-    # 2. Case-insensitive exact match
-    # ---------------------------------------------------------
-
-    item = (
-        db.query(InventoryItem)
-        .filter(InventoryItem.name.ilike(name))
-        .first()
-    )
-
-    if item:
-        return item
-
-    # ---------------------------------------------------------
-    # 3. Substring match
-    # ---------------------------------------------------------
-
-    item = (
-        db.query(InventoryItem)
-        .filter(
-            InventoryItem.name.ilike(f"%{name}%")
-        )
-        .first()
-    )
-
-    if item:
-        return item
-
-    return None
-
+    return get_sqlite_component(db, name)
 
 def search_inventory(db, query):
-    """
-    Search inventory intelligently.
-
-    A query such as:
-
-        How many esp32 dev kit are there in stock
-
-    should NOT search the entire sentence.
-
-    Instead, extract meaningful terms and search
-    product/category/supplier fields.
-    """
-
-    if not query:
-        return get_all_inventory(db)
-
-    query = query.strip().lower()
-
-    if not query:
-        return get_all_inventory(db)
-
-    # ---------------------------------------------------------
-    # First: search the complete query
-    # ---------------------------------------------------------
-
-    full_search = f"%{query}%"
-
-    results = (
-        db.query(InventoryItem)
-        .filter(
-            or_(
-                InventoryItem.name.ilike(full_search),
-                InventoryItem.category.ilike(full_search),
-                InventoryItem.supplier.ilike(full_search),
-            )
-        )
-        .order_by(InventoryItem.name)
-        .all()
-    )
-
-    if results:
-        return results
-
-    # ---------------------------------------------------------
-    # Second: remove common conversational words
-    # ---------------------------------------------------------
-
-    stop_words = {
-        "how",
-        "many",
-        "much",
-        "is",
-        "are",
-        "there",
-        "in",
-        "the",
-        "stock",
-        "available",
-        "availability",
-        "do",
-        "does",
-        "we",
-        "have",
-        "got",
-        "currently",
-        "can",
-        "you",
-        "tell",
-        "me",
-        "about",
-        "what",
-        "which",
-        "where",
-        "who",
-        "for",
-        "of",
-        "units",
-        "unit",
-        "left",
-        "remaining",
-        "please",
-        "show",
-        "give",
-    }
-
-    words = [
-        word
-        for word in query.replace("-", " ").split()
-        if word not in stop_words
-    ]
-
-    if not words:
-        return []
-
-    # ---------------------------------------------------------
-    # Third: search individual meaningful words
-    # ---------------------------------------------------------
-
-    conditions = []
-
-    for word in words:
-        if len(word) < 2:
-            continue
-
-        pattern = f"%{word}%"
-
-        conditions.extend([
-            InventoryItem.name.ilike(pattern),
-            InventoryItem.category.ilike(pattern),
-            InventoryItem.supplier.ilike(pattern),
-        ])
-
-    if not conditions:
-        return []
-
-    results = (
-        db.query(InventoryItem)
-        .filter(or_(*conditions))
-        .order_by(InventoryItem.name)
-        .all()
-    )
-
-    # ---------------------------------------------------------
-    # Rank results by number of matching words
-    # ---------------------------------------------------------
-
-    scored = []
-
-    for item in results:
-
-        item_text = " ".join([
-            item.name or "",
-            item.category or "",
-            item.supplier or "",
-        ]).lower()
-
-        score = sum(
-            1
-            for word in words
-            if word in item_text
-        )
-
-        scored.append((score, item))
-
-    scored.sort(
-        key=lambda x: (-x[0], x[1].name.lower())
-    )
-
-    return [item for score, item in scored]
-
+    return search_sqlite_inventory(db, query)
 
 def get_low_stock_items(db):
-    return (
-        db.query(InventoryItem)
-        .filter(
-            InventoryItem.stock <= InventoryItem.min_stock
-        )
-        .order_by(InventoryItem.stock.asc())
-        .all()
-    )
-
-
-def get_inventory_stats(db):
-    items = get_all_inventory(db)
-
-    return {
-        "total_components": len(items),
-        "total_units": sum(item.stock for item in items),
-        "low_stock": sum(
-            1
-            for item in items
-            if item.stock <= item.min_stock
-        ),
-    }
-
+    return get_sqlite_low_stock_items(db)
 
 def update_stock(db, item_id, new_stock):
-    item = (
-        db.query(InventoryItem)
-        .filter(InventoryItem.id == item_id)
-        .first()
-    )
+    return update_sqlite_stock(db, item_id, new_stock)
 
-    if not item:
-        return None
-
-    if new_stock < 0:
-        raise ValueError("Stock cannot be negative.")
-
-    item.stock = new_stock
-
-    db.commit()
-    db.refresh(item)
-
-    return item
-
-
-def create_reorder_request(db, item_id, quantity):
-
-    item = (
-        db.query(InventoryItem)
-        .filter(InventoryItem.id == item_id)
-        .first()
-    )
-
-    if not item:
-        return None
-
-    if quantity <= 0:
-        raise ValueError(
-            "Quantity must be greater than zero."
-        )
-
-    reorder = ReorderRequest(
-        item_id=item.id,
-        quantity=quantity,
-        supplier=item.supplier,
-        status="pending",
-    )
-
-    db.add(reorder)
-    db.commit()
-    db.refresh(reorder)
-
-    return reorder
-
+def create_sqlite_reorder(db, item_id, quantity):
+    return create_sqlite_reorder_request(db, item_id, quantity)
 
 def get_reorder_requests(db):
-    return (
-        db.query(ReorderRequest)
-        .order_by(
-            ReorderRequest.created_at.desc()
-        )
-        .all()
-    )
+    return get_sqlite_reorder_requests(db)

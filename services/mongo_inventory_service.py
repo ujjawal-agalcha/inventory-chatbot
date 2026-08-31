@@ -49,6 +49,7 @@ def product_to_dict(doc: dict) -> dict:
         "normalized_name": doc.get("normalized_name", ""),
         "details": doc.get("details", ""),
         "category": doc.get("category", "General"),
+        "sub_category": doc.get("sub_category", ""),
         "stock": current_stock,
         "current_stock": current_stock,
         "min_stock": min_stock,
@@ -495,6 +496,70 @@ def update_product_stock(product_id_or_name: str, new_stock: int) -> Optional[di
 
     updated = col.find_one({"_id": doc["_id"]})
     return product_to_dict(updated)
+
+
+def update_product(product_id: str, update_fields: dict) -> Optional[dict]:
+    """Update any editable fields for a product in MongoDB."""
+    col = get_products_collection()
+
+    if not ObjectId.is_valid(product_id):
+        return None
+
+    doc = col.find_one({"_id": ObjectId(product_id)})
+    if not doc:
+        return None
+
+    allowed_fields = {
+        "name", "category", "sub_category", "current_stock", "min_stock",
+        "unit_price", "supplier", "market", "details", "status",
+    }
+
+    mongo_set = {"updated_at": datetime.utcnow()}
+    for key, value in update_fields.items():
+        if key in allowed_fields and value is not None:
+            mongo_set[key] = value
+
+    # If name changed, update normalized_name and aliases
+    if "name" in mongo_set:
+        new_norm = normalize_text(mongo_set["name"])
+        mongo_set["normalized_name"] = new_norm
+
+    # Recalculate status based on stock
+    stock = mongo_set.get("current_stock", doc.get("current_stock", 0))
+    min_s = mongo_set.get("min_stock", doc.get("min_stock", 5))
+    if isinstance(stock, (int, float)) and isinstance(min_s, (int, float)):
+        mongo_set["status"] = (
+            "out_of_stock" if stock == 0
+            else ("low_stock" if stock <= min_s else "in_stock")
+        )
+
+    col.update_one({"_id": doc["_id"]}, {"$set": mongo_set})
+    updated = col.find_one({"_id": doc["_id"]})
+    return product_to_dict(updated)
+
+
+def get_out_of_stock_products() -> List[dict]:
+    """Retrieve all products where current_stock == 0."""
+    col = get_products_collection()
+    docs = col.find({"current_stock": 0}).sort("name", 1)
+    return [product_to_dict(d) for d in docs]
+
+
+def get_suppliers_summary() -> List[dict]:
+    """Retrieve supplier distribution summary."""
+    col = get_products_collection()
+    all_prods = list(col.find({}))
+    supplier_map = {}
+    for p in all_prods:
+        sup = p.get("supplier", "Unknown")
+        if sup not in supplier_map:
+            supplier_map[sup] = {"supplier": sup, "product_count": 0, "total_units": 0, "total_expense": 0.0, "products": []}
+        supplier_map[sup]["product_count"] += 1
+        supplier_map[sup]["total_units"] += p.get("current_stock", 0)
+        supplier_map[sup]["total_expense"] += p.get("total_expense", 0.0)
+        supplier_map[sup]["products"].append(p.get("name", ""))
+
+    return list(supplier_map.values())
 
 
 def create_reorder_request(

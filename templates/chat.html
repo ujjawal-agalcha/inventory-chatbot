@@ -21,7 +21,7 @@
                 <div class="brand-logo">IMS</div>
                 <div class="brand-text">
                     <h2>Inventory AI</h2>
-                    <p>MongoDB & Real Data</p>
+                    <p>Smart Management</p>
                 </div>
             </div>
 
@@ -29,6 +29,9 @@
             <div class="sidebar-nav">
                 <button class="nav-tab-btn active" id="tab-btn-chat" onclick="switchMainTab('chat')">
                     <span class="icon">💬</span> AI Assistant
+                </button>
+                <button class="nav-tab-btn" id="tab-btn-inventory" onclick="switchMainTab('inventory')">
+                    <span class="icon">📦</span> Inventory
                 </button>
                 <button class="nav-tab-btn" id="tab-btn-analytics" onclick="switchMainTab('analytics')">
                     <span class="icon">📊</span> Analytics & Master Data
@@ -55,7 +58,7 @@
         <div class="sidebar-footer">
             <div class="db-status-badge" id="db-status-badge">
                 <span class="status-dot"></span>
-                <span id="db-status-text">MongoDB: Connected</span>
+                <span id="db-status-text">System Status: Online</span>
             </div>
 
             <div class="user-card">
@@ -79,7 +82,7 @@
         <header class="top-header">
             <div>
                 <h1 id="page-title">Inventory Intelligence</h1>
-                <p id="page-subtitle">Real-time MongoDB stock monitoring, Excel ingestion & AI assistant</p>
+                <p id="page-subtitle">Real-time stock monitoring, procurement intelligence & AI assistant</p>
             </div>
 
             <div class="header-actions">
@@ -87,8 +90,8 @@
                     <span class="status-dot"></span>
                     <span class="status-text">Connecting...</span>
                 </div>
-                <button class="notify-btn" onclick="quickAsk('Which items are low stock?')">
-                    Low Stock Alerts (<span id="low-stock-badge">{{ stats.low_stock if stats else '0' }}</span>)
+                <button class="notify-btn" onclick="openKPIModal('low_stock')">
+                    ⚠️ Low Stock Alerts (<span id="low-stock-badge">{{ stats.low_stock if stats else '0' }}</span>)
                 </button>
                 <button class="header-export-btn" onclick="downloadMasterSheet()" title="Download current live Master Sheet (.xlsx)">
                     📥 Export Master Sheet
@@ -96,47 +99,47 @@
             </div>
         </header>
 
-        <!-- Stats Grid (Always Visible) -->
+        <!-- Stats Grid (Clickable Dynamic KPIs) -->
         <section class="stats-grid">
-            <div class="stat-card">
+            <div class="stat-card clickable" onclick="openKPIModal('total')" title="Click to view all products">
                 <div class="stat-icon blue">📦</div>
                 <div class="stat-info">
                     <span>Total Products</span>
                     <h3 id="stat-total">{{ stats.total_components if stats else '0' }}</h3>
-                    <small>Master database items</small>
+                    <small>Registered items</small>
                 </div>
             </div>
 
-            <div class="stat-card">
+            <div class="stat-card clickable" onclick="openKPIModal('low_stock')" title="Click to view low stock items">
                 <div class="stat-icon red">⚠️</div>
                 <div class="stat-info">
                     <span>Low Stock Items</span>
                     <h3 id="stat-low">{{ stats.low_stock if stats else '0' }}</h3>
-                    <small>Require attention</small>
+                    <small>Requires reorder</small>
                 </div>
             </div>
 
-            <div class="stat-card">
+            <div class="stat-card clickable" onclick="openKPIModal('units')" title="Click to view stock breakdown">
                 <div class="stat-icon green">🚚</div>
                 <div class="stat-info">
-                    <span>Total Units</span>
+                    <span>Total Stock Units</span>
                     <h3 id="stat-units">{{ stats.total_units if stats else '0' }}</h3>
-                    <small>Live inventory count</small>
+                    <small>Units in inventory</small>
                 </div>
             </div>
 
-            <div class="stat-card">
+            <div class="stat-card clickable" onclick="openKPIModal('expenses')" title="Click to view expense details">
                 <div class="stat-icon purple">💰</div>
                 <div class="stat-info">
                     <span>Total Expenses</span>
                     <h3 id="stat-expenses">₹{{ '{:,.0f}'.format(stats.total_expenses) if stats and stats.total_expenses else '0' }}</h3>
-                    <small>Cumulative spending</small>
+                    <small>Cumulative spend</small>
                 </div>
             </div>
         </section>
 
         <!-- ====================================================
-             VIEW 1: AI ASSISTANT & CATEGORIES (DEFAULT VIEW)
+             VIEW 1: AI ASSISTANT (CHAT)
              ==================================================== -->
         <section id="view-chat" class="tab-view active">
             <div class="content-grid">
@@ -159,7 +162,7 @@
                             <div class="assistant-icon">AI</div>
                             <div>
                                 <h3 id="active-chat-title">Inventory Assistant</h3>
-                                <p id="active-chat-subtitle">Direct MongoDB stock lookup & AI reasoning</p>
+                                <p id="active-chat-subtitle">Real-time stock assistance & intelligent procurement reasoning</p>
                             </div>
                         </div>
 
@@ -193,16 +196,16 @@
 
                     <div id="conversation" class="conversation">
                         <div class="bot-message" id="welcome-message">
-                            <strong>👋 Welcome to the Real Inventory Management Assistant!</strong><br><br>
-                            I query the live <strong>MongoDB Master Inventory</strong> directly. You can ask me:
+                            <strong>👋 Welcome to the Inventory Assistant!</strong><br><br>
+                            I provide direct insight into your inventory, stock levels, and procurement records. You can ask me:
                             <ul>
-                                <li><strong>Check Stock:</strong> <em>"How many ESP32-CAM do we have?"</em> or <em>"What is the stock of Arduino Uno R3?"</em></li>
+                                <li><strong>Check Stock:</strong> <em>"How many ESP32 DevKit are available?"</em> or <em>"What is the stock of Arduino Uno R3?"</em></li>
                                 <li><strong>Low Stock & Shortages:</strong> <em>"Which items are low in stock?"</em></li>
-                                <li><strong>Supplier & Vendors:</strong> <em>"Who supplies SG90 Servo Motor?"</em> or <em>"Who supplies HC-05 Bluetooth?"</em></li>
+                                <li><strong>Suppliers & Vendors:</strong> <em>"Who supplies SG90 Servo Motor?"</em> or <em>"Who supplies HC-05 Bluetooth?"</em></li>
                                 <li><strong>Expenses & Purchases:</strong> <em>"How much did we spend on NEMA 17 Stepper Motor?"</em></li>
                                 <li><strong>Requirements & Orders:</strong> <em>"What components are required?"</em></li>
-                                <li><strong>Automated Reorder:</strong> <em>"Reorder 10 units of 18650 Li-ion Battery"</em></li>
-                                <li><strong>Multi-turn Memory:</strong> <em>"Who supplies it?"</em> or <em>"What is its price?"</em> after asking about any item</li>
+                                <li><strong>Automated Reorders:</strong> <em>"Reorder 10 units of 18650 Li-ion Battery"</em></li>
+                                <li><strong>Follow-up Queries:</strong> <em>"Who supplies it?"</em> or <em>"What is its price?"</em> after asking about any item</li>
                             </ul>
                         </div>
                     </div>
@@ -224,12 +227,60 @@
         </section>
 
         <!-- ====================================================
-             VIEW 2: REAL-TIME ANALYTICAL DASHBOARD
+             VIEW 2: DEDICATED INVENTORY TAB (EDITABLE)
+             ==================================================== -->
+        <section id="view-inventory" class="tab-view" style="display: none;">
+            <div class="data-table-card">
+                <div class="table-header-flex">
+                    <div>
+                        <h3>Inventory Management</h3>
+                        <p>Real-time inventory records. Click <strong>Edit</strong> on any item to modify stock, minimum threshold, price, or supplier details.</p>
+                    </div>
+                    <div class="table-actions">
+                        <input type="text" id="inventory-tab-search" placeholder="Search product, category, vendor..." oninput="filterInventoryTabTable()">
+                        <select id="inventory-tab-cat-filter" onchange="filterInventoryTabTable()">
+                            <option value="">All Categories</option>
+                        </select>
+                        <button class="mini-btn primary" onclick="loadInventoryTabTable()">🔄 Refresh</button>
+                    </div>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="styled-table" id="inventory-tab-table">
+                        <thead>
+                            <tr>
+                                <th>Product / Component</th>
+                                <th>Category</th>
+                                <th>Sub-Category</th>
+                                <th>Price</th>
+                                <th>Current Stock</th>
+                                <th>Minimum Stock</th>
+                                <th>Supplier</th>
+                                <th>Status</th>
+                                <th>Last Updated</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="inventory-tab-body">
+                            <tr><td colspan="10" class="text-center">Loading inventory...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ====================================================
+             VIEW 3: REAL-TIME ANALYTICAL DASHBOARD & MASTER DATA
              ==================================================== -->
         <section id="view-analytics" class="tab-view" style="display: none;">
             
-            <!-- Charts Section -->
-            <div class="analytics-charts-grid">
+            <!-- On-Demand Chart Controls -->
+            <div class="chart-controls-bar">
+                <button class="chart-toggle-btn active" id="btn-toggle-all-charts" onclick="toggleAllCharts()">Show / Hide Charts</button>
+            </div>
+
+            <!-- Charts Grid (On-demand) -->
+            <div class="analytics-charts-grid" id="analytics-charts-container">
                 <div class="chart-card">
                     <div class="chart-header">
                         <h3>Monthly Expenses Trend</h3>
@@ -275,16 +326,16 @@
             <div class="data-table-card">
                 <div class="table-header-flex">
                     <div>
-                        <h3>Master Inventory Database (MongoDB)</h3>
-                        <p>Unified dataset automatically merged and normalized from uploaded Excel workbooks</p>
+                        <h3>Master Consolidated Inventory</h3>
+                        <p>Unified dataset automatically consolidated and normalized across all uploaded Excel sheets</p>
                     </div>
                     <div class="table-actions">
-                        <input type="text" id="inventory-table-search" placeholder="Search product, category, vendor..." oninput="filterMasterTable()">
+                        <input type="text" id="inventory-table-search" placeholder="Search master records..." oninput="filterMasterTable()">
                         <select id="inventory-category-filter" onchange="filterMasterTable()">
                             <option value="">All Categories</option>
                         </select>
                         <button class="mini-btn primary" onclick="refreshDashboardData()">🔄 Refresh</button>
-                        <button class="mini-btn success" id="btn-download-master-sheet" onclick="downloadMasterSheet()" title="Export current MongoDB inventory to Excel">📥 Download Master Sheet</button>
+                        <button class="mini-btn success" id="btn-download-master-sheet" onclick="downloadMasterSheet()" title="Export current consolidated inventory to Excel">📥 Download Master Sheet</button>
                     </div>
                 </div>
 
@@ -294,6 +345,7 @@
                             <tr>
                                 <th>Product / Component</th>
                                 <th>Category</th>
+                                <th>Sub-Category</th>
                                 <th>Current Stock</th>
                                 <th>Min Level</th>
                                 <th>Unit Price</th>
@@ -304,7 +356,7 @@
                             </tr>
                         </thead>
                         <tbody id="master-table-body">
-                            <tr><td colspan="9" class="text-center">Loading live inventory...</td></tr>
+                            <tr><td colspan="10" class="text-center">Loading inventory...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -368,7 +420,7 @@
         </section>
 
         <!-- ====================================================
-             VIEW 3: EXCEL IMPORT & UPLOAD HUB
+             VIEW 4: EXCEL IMPORT & UPLOAD HUB
              ==================================================== -->
         <section id="view-upload" class="tab-view" style="display: none;">
             
@@ -489,6 +541,101 @@
 
     </main>
 
+</div>
+
+<!-- ============================================================
+     MODAL 1: KPI DRILL-DOWN DETAILS MODAL
+     ============================================================ -->
+<div class="modal-backdrop" id="kpi-modal">
+    <div class="modal-dialog modal-large">
+        <div class="modal-header">
+            <div>
+                <h3 id="kpi-modal-title">📊 KPI Details</h3>
+                <p id="kpi-modal-subtitle">Underlying dynamic records for this metric</p>
+            </div>
+            <button class="modal-close-btn" onclick="closeKPIModal()">✕</button>
+        </div>
+        <div class="modal-body" id="kpi-modal-body">
+            <div class="loading-state">Loading KPI details...</div>
+        </div>
+        <div class="modal-footer">
+            <button class="mini-btn" onclick="closeKPIModal()">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================================
+     MODAL 2: INVENTORY PRODUCT EDIT MODAL
+     ============================================================ -->
+<div class="modal-backdrop" id="inventory-edit-modal">
+    <div class="modal-dialog">
+        <div class="modal-header">
+            <div>
+                <h3>✏️ Edit Inventory Product</h3>
+                <p>Modify stock, threshold, pricing, and supplier specifications</p>
+            </div>
+            <button class="modal-close-btn" onclick="closeEditModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <form id="product-edit-form" onsubmit="handleProductEditSubmit(event)">
+                <input type="hidden" id="edit-product-id">
+
+                <div class="form-grid">
+                    <div class="form-group full-width">
+                        <label class="form-label" for="edit-name">Product / Component Name *</label>
+                        <input type="text" id="edit-name" class="form-input" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="edit-category">Category *</label>
+                        <input type="text" id="edit-category" class="form-input" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="edit-subcategory">Sub-Category</label>
+                        <input type="text" id="edit-subcategory" class="form-input">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="edit-stock">Current Stock *</label>
+                        <input type="number" id="edit-stock" class="form-input" min="0" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="edit-min-stock">Minimum Stock Threshold *</label>
+                        <input type="number" id="edit-min-stock" class="form-input" min="0" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="edit-price">Unit Price (₹) *</label>
+                        <input type="number" id="edit-price" class="form-input" min="0" step="0.01" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="edit-supplier">Supplier / Vendor *</label>
+                        <input type="text" id="edit-supplier" class="form-input" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="edit-market">Market / Source</label>
+                        <input type="text" id="edit-market" class="form-input">
+                    </div>
+
+                    <div class="form-group full-width">
+                        <label class="form-label" for="edit-details">Details & Specifications</label>
+                        <textarea id="edit-details" class="form-textarea"></textarea>
+                    </div>
+                </div>
+
+                <div id="edit-feedback" class="upload-feedback" style="display: none; margin-top: 16px;"></div>
+
+                <div class="modal-footer" style="padding: 16px 0 0 0; margin-top: 20px;">
+                    <button type="button" class="mini-btn" onclick="closeEditModal()">Cancel</button>
+                    <button type="submit" class="mini-btn primary" id="btn-save-edit">💾 Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
 </div>
 
 <script src="/static/script.js"></script>
