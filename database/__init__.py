@@ -7,8 +7,6 @@ from .models import (
     User,
     Conversation,
     Message,
-    InventoryItem,
-    ReorderRequest,
 )
 from .mongodb import (
     get_mongo_client,
@@ -42,13 +40,6 @@ from .repositories import (
     delete_conversation_repo,
     add_message_repo,
     get_conversation_messages_repo,
-    get_all_sqlite_inventory,
-    get_sqlite_component,
-    search_sqlite_inventory,
-    get_sqlite_low_stock_items,
-    update_sqlite_stock,
-    create_sqlite_reorder_request,
-    get_sqlite_reorder_requests,
     create_import_record_repo,
     update_import_record_repo,
     find_import_record_repo,

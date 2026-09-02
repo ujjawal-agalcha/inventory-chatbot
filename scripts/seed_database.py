@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime
-from database.models import SessionLocal, InventoryItem
 from database.mongodb import get_products_collection, init_mongo_indexes
 from excel.normalizer import normalize_text, extract_keywords_and_aliases
 
@@ -491,47 +490,11 @@ def seed_mongo_inventory():
 
 
 def seed_inventory():
-    """Seed both SQLite (legacy) and MongoDB."""
-    db = SessionLocal()
-    try:
-        added = 0
-        skipped = 0
-
-        for item_data in ELECTRONIC_COMPONENTS_DATA:
-            existing = (
-                db.query(InventoryItem)
-                .filter(InventoryItem.name == item_data["name"])
-                .first()
-            )
-            if existing:
-                skipped += 1
-                continue
-
-            item = InventoryItem(
-                name=item_data["name"],
-                category=item_data["category"],
-                stock=item_data["stock"],
-                min_stock=item_data["min_stock"],
-                supplier=item_data["supplier"],
-            )
-            db.add(item)
-            added += 1
-
-        db.commit()
-    except Exception as error:
-        db.rollback()
-        logger.error("Error seeding SQLite inventory: %s", error)
-        raise
-    finally:
-        db.close()
-
-    try:
-        seed_mongo_inventory()
-    except Exception as error:
-        logger.error("Error seeding MongoDB inventory: %s", error)
+    """Seed MongoDB with permanent electronic equipment inventory."""
+    return seed_mongo_inventory()
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    seed_inventory()
-    print("Database seeding completed successfully.")
+    res = seed_inventory()
+    print(f"Database seeding completed successfully: {res}")

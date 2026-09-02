@@ -20,15 +20,7 @@ from .conversation_repository import (
     add_message_repo,
     get_conversation_messages_repo,
 )
-from .inventory_repository import (
-    get_all_sqlite_inventory,
-    get_sqlite_component,
-    search_sqlite_inventory,
-    get_sqlite_low_stock_items,
-    update_sqlite_stock,
-    create_sqlite_reorder_request,
-    get_sqlite_reorder_requests,
-)
+
 from .import_repository import (
     create_import_record_repo,
     update_import_record_repo,

@@ -20,15 +20,6 @@ from database.mongodb import (
     get_procurement_collection,
     get_expenses_collection,
 )
-from database.repositories.inventory_repository import (
-    get_all_sqlite_inventory,
-    get_sqlite_component,
-    search_sqlite_inventory,
-    get_sqlite_low_stock_items,
-    update_sqlite_stock,
-    create_sqlite_reorder_request,
-    get_sqlite_reorder_requests,
-)
 
 logger = logging.getLogger("services.inventory")
 
@@ -183,29 +174,3 @@ def get_all_reorders(limit: int = 50) -> List[dict]:
     docs = proc_col.find({}).sort("created_at", -1).limit(limit)
     from database.repositories.import_repository import _procurement_doc_to_dict
     return [_procurement_doc_to_dict(d) for d in docs]
-
-
-# ============================================================
-# SQLITE BACKWARDS COMPATIBILITY WRAPPERS
-# ============================================================
-
-def get_all_inventory(db):
-    return get_all_sqlite_inventory(db)
-
-def get_component(db, name):
-    return get_sqlite_component(db, name)
-
-def search_inventory(db, query):
-    return search_sqlite_inventory(db, query)
-
-def get_low_stock_items(db):
-    return get_sqlite_low_stock_items(db)
-
-def update_stock(db, item_id, new_stock):
-    return update_sqlite_stock(db, item_id, new_stock)
-
-def create_sqlite_reorder(db, item_id, quantity):
-    return create_sqlite_reorder_request(db, item_id, quantity)
-
-def get_reorder_requests(db):
-    return get_sqlite_reorder_requests(db)

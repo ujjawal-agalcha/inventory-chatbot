@@ -6,7 +6,6 @@ from typing import List, Dict, Any, Optional
 from bson import ObjectId
 
 from database.mongodb import get_products_collection
-from excel.normalizer import normalize_text
 
 logger = logging.getLogger("database.repositories.product")
 
